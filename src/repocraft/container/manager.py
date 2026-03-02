@@ -71,7 +71,7 @@ class ContainerManager:
         )
         logger.debug("Container started: %s", self._container.short_id)
 
-        result = self.exec_sync(f"git clone --depth=1 {repo_url} /workspace/repo")
+        result = self.exec_sync(f"git clone --depth=1 {repo_url} /workspace/repo", workdir="/workspace")
         if result.exit_code != 0:
             raise RuntimeError(f"git clone failed:\n{result.combined}")
         logger.info("Repository cloned successfully")
