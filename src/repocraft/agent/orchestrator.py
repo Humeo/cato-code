@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Callable
 
 from claude_agent_sdk import (
@@ -135,6 +136,9 @@ class AgentOrchestrator:
         num_turns = 0
         error: str | None = None
 
+        # Temporarily unset CLAUDECODE so the SDK can launch its subprocess
+        # even when repocraft itself is running inside a Claude Code session.
+        _claudecode = os.environ.pop("CLAUDECODE", None)
         try:
             async with ClaudeSDKClient(options=options) as client:
                 await client.query(prompt)
@@ -153,6 +157,9 @@ class AgentOrchestrator:
         except Exception as e:
             logger.error("Phase %s error: %s", phase.value, e)
             error = str(e)
+        finally:
+            if _claudecode is not None:
+                os.environ["CLAUDECODE"] = _claudecode
 
         success = self._parse_phase_success(phase, full_text)
         summary = self._extract_conclusion(full_text) or (
