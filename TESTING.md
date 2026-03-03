@@ -4,9 +4,18 @@
 
 ✅ Docker 镜像已构建: `repocraft-worker:v1` (645MB)
 ✅ 环境变量已设置:
+
+**标准 Anthropic API**:
 ```bash
-export ANTHROPIC_API_KEY="your-key"
-export GITHUB_TOKEN="your-token"
+export ANTHROPIC_API_KEY="sk-ant-xxx"
+export GITHUB_TOKEN="ghp_xxx"
+```
+
+**或使用自定义 API 端点**（如代理服务）:
+```bash
+export ANTHROPIC_AUTH_TOKEN="sk-xxx"
+export ANTHROPIC_BASE_URL="https://cc.580ai.ne"
+export GITHUB_TOKEN="ghp_xxx"
 ```
 
 ## 测试命令
@@ -78,10 +87,16 @@ docker exec repocraft-worker env | grep GITHUB_TOKEN
 ```
 
 ### Q: Claude API 错误
-**A**: 检查 ANTHROPIC_API_KEY
+**A**: 检查 API key 和 base URL
 ```bash
+# 标准 API
 echo $ANTHROPIC_API_KEY
 docker exec repocraft-worker env | grep ANTHROPIC_API_KEY
+
+# 自定义端点
+echo $ANTHROPIC_AUTH_TOKEN
+echo $ANTHROPIC_BASE_URL
+docker exec repocraft-worker env | grep ANTHROPIC
 ```
 
 ## 调试模式
