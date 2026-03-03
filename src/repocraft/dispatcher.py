@@ -23,6 +23,7 @@ async def dispatch(
     container_mgr: ContainerManager,
     anthropic_api_key: str,
     github_token: str,
+    anthropic_base_url: str | None = None,
     max_turns: int = 200,
     verbose: bool = False,
 ) -> None:
@@ -46,7 +47,7 @@ async def dispatch(
 
     try:
         # 1. Ensure container running
-        container_mgr.ensure_running(anthropic_api_key, github_token)
+        container_mgr.ensure_running(anthropic_api_key, github_token, anthropic_base_url)
 
         # 2. Ensure repo cloned
         container_mgr.ensure_repo(repo_id, repo_url)

@@ -10,7 +10,7 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
-from .config import get_anthropic_api_key, get_github_token, parse_issue_url, repo_id_from_url
+from .config import get_anthropic_api_key, get_anthropic_base_url, get_github_token, parse_issue_url, repo_id_from_url
 from .container.manager import ContainerManager
 from .dispatcher import dispatch
 from .store import Store
@@ -118,6 +118,7 @@ async def cmd_fix(args: argparse.Namespace) -> int:
 
     try:
         anthropic_api_key = get_anthropic_api_key()
+        anthropic_base_url = get_anthropic_base_url()
         github_token = get_github_token()
     except RuntimeError as e:
         console.print(f"[red]Error:[/red] {e}")
@@ -147,6 +148,7 @@ async def cmd_fix(args: argparse.Namespace) -> int:
                 container_mgr=container_mgr,
                 anthropic_api_key=anthropic_api_key,
                 github_token=github_token,
+                anthropic_base_url=anthropic_base_url,
                 max_turns=args.max_turns,
                 verbose=args.verbose,
             )

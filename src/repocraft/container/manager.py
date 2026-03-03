@@ -23,11 +23,15 @@ MEMORY_LIMIT = os.environ.get("REPOCRAFT_MEM", "8g")
 CPU_QUOTA = int(os.environ.get("REPOCRAFT_CPUS", "4")) * 100_000
 
 
-def _container_env(anthropic_api_key: str, github_token: str) -> dict[str, str]:
+def _container_env(anthropic_api_key: str, github_token: str, anthropic_base_url: str | None = None) -> dict[str, str]:
     env: dict[str, str] = {
         "ANTHROPIC_API_KEY": anthropic_api_key,
         "GITHUB_TOKEN": github_token,
     }
+    # Support custom Anthropic API endpoint
+    if anthropic_base_url:
+        env["ANTHROPIC_BASE_URL"] = anthropic_base_url
+    # Forward proxy settings
     for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
         val = os.environ.get(key, "")
         if val:
@@ -64,13 +68,13 @@ class ContainerManager:
         except docker.errors.NotFound:
             return None
 
-    def ensure_running(self, anthropic_api_key: str, github_token: str) -> None:
+    def ensure_running(self, anthropic_api_key: str, github_token: str, anthropic_base_url: str | None = None) -> None:
         """4-state machine: missing→create, exited→start, restarting→wait, running→noop."""
         container = self._get_container()
 
         if container is None:
             self._build_image_if_needed()
-            self._create_and_start(anthropic_api_key, github_token)
+            self._create_and_start(anthropic_api_key, github_token, anthropic_base_url)
             self._write_user_claude_md()
             return
 
@@ -122,8 +126,8 @@ class ContainerManager:
             raise docker.errors.BuildError(str(e), iter(build_log)) from e
         logger.info("Image %s built successfully", IMAGE_NAME)
 
-    def _create_and_start(self, anthropic_api_key: str, github_token: str) -> None:
-        env = _container_env(anthropic_api_key, github_token)
+    def _create_and_start(self, anthropic_api_key: str, github_token: str, anthropic_base_url: str | None = None) -> None:
+        env = _container_env(anthropic_api_key, github_token, anthropic_base_url)
         self._client.containers.run(
             IMAGE_NAME,
             name=CONTAINER_NAME,

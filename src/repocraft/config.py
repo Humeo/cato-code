@@ -7,10 +7,16 @@ from pathlib import Path
 
 
 def get_anthropic_api_key() -> str:
-    key = os.environ.get("ANTHROPIC_API_KEY")
+    """Get Anthropic API key from ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN."""
+    key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
     if not key:
-        raise RuntimeError("ANTHROPIC_API_KEY environment variable not set")
+        raise RuntimeError("ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN environment variable not set")
     return key
+
+
+def get_anthropic_base_url() -> str | None:
+    """Get custom Anthropic API base URL if set."""
+    return os.environ.get("ANTHROPIC_BASE_URL")
 
 
 def get_github_token() -> str:
