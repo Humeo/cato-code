@@ -60,8 +60,11 @@ async def dispatch(
         # 2. Ensure repo cloned
         container_mgr.ensure_repo(repo_id, repo_url)
 
-        # 3. Check if repo needs init
-        result = container_mgr.exec(f"test -f /repos/{repo_id}/CLAUDE.md")
+        # 3. Check if repo needs init (look at origin, since local is about to be reset)
+        result = container_mgr.exec(
+            "git ls-tree -r HEAD --name-only | grep -x CLAUDE.md",
+            workdir=f"/repos/{repo_id}",
+        )
         needs_init = result.exit_code != 0
 
         if needs_init:

@@ -133,7 +133,17 @@ def main() -> None:
         print("Error: empty prompt", file=sys.stderr)
         sys.exit(2)
 
-    exit_code = asyncio.run(run(prompt, max_turns, cwd, session_id))
+    try:
+        exit_code = asyncio.run(run(prompt, max_turns, cwd, session_id))
+    except RuntimeError as exc:
+        # anyio cancel-scope cleanup bug raises RuntimeError after the result is
+        # already emitted. Treat as success if the text looks like the known issue.
+        if "cancel scope" in str(exc).lower():
+            exit_code = 0
+        else:
+            _emit({"type": "result", "result": f"RuntimeError: {exc}", "is_error": True,
+                   "cost_usd": None, "session_id": None, "num_turns": 0, "duration_ms": 0})
+            exit_code = 1
     sys.exit(exit_code)
 
 

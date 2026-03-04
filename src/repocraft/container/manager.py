@@ -82,9 +82,11 @@ class ContainerManager:
 
         status = container.status
         if status == "running":
+            self._configure_git_identity()
             return
         elif status in ("exited", "stopped", "created"):
             container.start()
+            self._configure_git_identity()
         elif status == "restarting":
             container.reload()
         else:
@@ -147,6 +149,11 @@ class ContainerManager:
             environment=env,
         )
         logger.info("Container %s started", CONTAINER_NAME)
+        # Fix volume ownership (named volumes may be initialized as root)
+        self._client.containers.get(CONTAINER_NAME).exec_run(
+            cmd=["chown", "-R", "repocraft:repocraft", "/repos", "/output"],
+            user="root",
+        )
 
     def _write_user_claude_md(self) -> None:
         from ..templates.user_claude_md import get_user_claude_md
@@ -156,11 +163,13 @@ class ContainerManager:
         logger.debug("User CLAUDE.md written to container")
 
     def _configure_git_identity(self) -> None:
-        """Set git user.name and user.email inside the container."""
+        """Set git user.name, email, safe.directory, and credential helper inside the container."""
         name = get_git_user_name()
         email = get_git_user_email()
         self.exec(f'git config --global user.name "{name}"')
         self.exec(f'git config --global user.email "{email}"')
+        self.exec("git config --global --add safe.directory '*'")
+        self.exec("git config --global credential.helper repocraft")
         logger.debug("Git identity: %s <%s>", name, email)
 
     def _put_file(self, path: str, content: str) -> None:
@@ -174,6 +183,10 @@ class ContainerManager:
         with tarfile.open(fileobj=buf, mode="w") as tf:
             info = tarfile.TarInfo(name=filename)
             info.size = len(content_bytes)
+            info.uid = 1001  # repocraft user
+            info.gid = 1001
+            info.uname = "repocraft"
+            info.gname = "repocraft"
             tf.addfile(info, io.BytesIO(content_bytes))
         buf.seek(0)
         container.put_archive(directory, buf)
@@ -281,7 +294,7 @@ class ContainerManager:
         self._put_file(prompt_path, prompt)
 
         session_arg = session_id if session_id else "-"
-        cmd = f"python3 /app/run_activity.py {max_turns} {cwd} {session_arg} {prompt_path} && rm -f {prompt_path}"
+        cmd = f"python3 /app/run_activity.py {max_turns} {cwd} {session_arg} {prompt_path}"
 
         async for item in self.exec_stream(cmd, workdir=cwd):
             yield item
