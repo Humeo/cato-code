@@ -213,8 +213,10 @@ async def _build_prompt(activity: dict, repo: dict, github_token: str) -> str:
                 f"You were mentioned in a comment on PR #{pr_num} of "
                 f"https://github.com/{owner}/{repo_name}/pull/{pr_num}.\n\n"
                 f"The request was: {instruction}\n\n"
-                f"Read the PR (use `gh pr view {pr_num}`) to understand the context, "
-                f"then carry out the requested task."
+                f"Read the PR (use `gh pr view {pr_num} --comments`) to understand the context, "
+                f"then carry out the requested task.\n\n"
+                f"When done, reply to the PR with a summary of what you did: "
+                f"`gh pr comment {pr_num} --body \"...\"`"
             )
         elif trigger and trigger.startswith("issue:"):
             parts = trigger.split(":", 2)
@@ -224,8 +226,10 @@ async def _build_prompt(activity: dict, repo: dict, github_token: str) -> str:
                 f"You were mentioned in a comment on issue #{issue_num} of "
                 f"https://github.com/{owner}/{repo_name}/issues/{issue_num}.\n\n"
                 f"The request was: {instruction}\n\n"
-                f"Read the issue (use `gh issue view {issue_num}`) to understand the context, "
-                f"then carry out the requested task."
+                f"Read the issue (use `gh issue view {issue_num} --comments`) to understand the context, "
+                f"then carry out the requested task.\n\n"
+                f"When done, reply to the issue with a summary of what you did: "
+                f"`gh issue comment {issue_num} --body \"...\"`"
             )
         return trigger or "Execute the task as described."
 

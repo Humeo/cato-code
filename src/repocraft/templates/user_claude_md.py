@@ -143,7 +143,8 @@ When filing issues from patrol scans:
 ### `task`
 - Execute the instruction exactly as stated
 - Capture evidence of completion (test output, build output)
-- Create PR with evidence section
+- If triggered by a @repocraft mention on a PR or issue, **reply to that PR/issue** with what you did (use `gh pr comment` or `gh issue comment`)
+- Create PR with evidence section if code changes are made
 - Branch: `repocraft/task/{short-slug}`
 
 ### `scan` (patrol)
