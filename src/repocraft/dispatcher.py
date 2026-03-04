@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 IDLE_TIMEOUT_SECS = 600   # 10 minutes without output → kill
 HARD_TIMEOUT_SECS = 7200  # 2 hours absolute maximum
+MAX_RETRIES = 3           # SDK runner retries on transient failure
+RETRY_DELAY_SECS = 30     # Delay between retries
 
 
 async def dispatch(
@@ -88,17 +90,36 @@ async def dispatch(
         if activity["kind"] == "respond_review":
             resume_session_id = _find_original_session_id(activity, store)
 
-        # 8. Execute SDK runner and stream logs
-        exit_code, session_id, cost_usd = await _execute_sdk_runner(
-            activity_id=activity_id,
-            repo_id=repo_id,
-            prompt=prompt,
-            store=store,
-            container_mgr=container_mgr,
-            max_turns=max_turns,
-            session_id=resume_session_id,
-            verbose=verbose,
-        )
+        # 8. Execute SDK runner with retries on transient failure
+        exit_code = 1
+        session_id = None
+        cost_usd = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            exit_code, session_id, cost_usd = await _execute_sdk_runner(
+                activity_id=activity_id,
+                repo_id=repo_id,
+                prompt=prompt,
+                store=store,
+                container_mgr=container_mgr,
+                max_turns=max_turns,
+                session_id=resume_session_id,
+                verbose=verbose,
+            )
+            if exit_code == 0:
+                break
+            if attempt < MAX_RETRIES:
+                logger.warning(
+                    "Activity %s attempt %d/%d failed, retrying in %ds",
+                    activity_id[:8], attempt, MAX_RETRIES, RETRY_DELAY_SECS,
+                )
+                await asyncio.sleep(RETRY_DELAY_SECS)
+                # Reset repo to clean state before retry
+                if activity["kind"] != "respond_review":
+                    container_mgr.reset_repo(repo_id)
+            else:
+                logger.error(
+                    "Activity %s failed after %d attempts", activity_id[:8], MAX_RETRIES
+                )
 
         # 9. Extract summary from result line
         summary = _extract_summary(store.get_logs(activity_id))
@@ -119,7 +140,7 @@ async def dispatch(
                 summary=summary,
                 session_id=session_id,
             )
-            logger.warning("Activity %s failed with exit code %d", activity_id, exit_code)
+            logger.warning("Activity %s failed after %d attempts", activity_id[:8], MAX_RETRIES)
             await _notify_failure(activity, repo, github_token, summary)
 
     except asyncio.TimeoutError:
