@@ -82,10 +82,12 @@ class ContainerManager:
 
         status = container.status
         if status == "running":
+            self._write_user_claude_md()
             self._configure_git_identity()
             return
         elif status in ("exited", "stopped", "created"):
             container.start()
+            self._write_user_claude_md()
             self._configure_git_identity()
         elif status == "restarting":
             container.reload()
