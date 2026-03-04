@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from .config import parse_repo_url, repo_id_from_url
+from .github.commenter import failure_comment, post_issue_comment
 from .github.issue_fetcher import fetch_issue
 from .templates.init_prompt import get_init_prompt
 from .templates.prompts import (
@@ -119,15 +120,57 @@ async def dispatch(
                 session_id=session_id,
             )
             logger.warning("Activity %s failed with exit code %d", activity_id, exit_code)
+            await _notify_failure(activity, repo, github_token, summary)
 
     except asyncio.TimeoutError:
-        store.update_activity(activity_id, status="failed", summary="Timeout")
+        summary = "Timeout: activity exceeded time limit"
+        store.update_activity(activity_id, status="failed", summary=summary)
         logger.error("Activity %s timed out", activity_id)
+        await _notify_failure(activity, repo, github_token, summary)
         raise
     except Exception as e:
-        store.update_activity(activity_id, status="failed", summary=f"Error: {e}")
+        summary = f"Error: {e}"
+        store.update_activity(activity_id, status="failed", summary=summary)
         logger.exception("Activity %s failed with exception", activity_id)
+        await _notify_failure(activity, repo, github_token, summary)
         raise
+
+
+async def _notify_failure(
+    activity: dict,
+    repo: dict | None,
+    github_token: str,
+    error_summary: str,
+) -> None:
+    """Post a failure comment on the relevant PR/issue if applicable."""
+    if not github_token or repo is None:
+        return
+    trigger = activity.get("trigger") or ""
+    kind = activity.get("kind", "")
+
+    # Determine target: PR or issue number from trigger
+    issue_number: int | None = None
+    if trigger.startswith("pr:"):
+        try:
+            issue_number = int(trigger.split(":")[1])
+        except (IndexError, ValueError):
+            pass
+    elif trigger.startswith("issue:"):
+        try:
+            issue_number = int(trigger.split(":")[1])
+        except (IndexError, ValueError):
+            pass
+
+    if issue_number is None:
+        return
+
+    try:
+        owner, repo_name = parse_repo_url(repo["repo_url"])
+    except ValueError:
+        return
+
+    body = failure_comment(kind, error_summary)
+    await post_issue_comment(owner, repo_name, issue_number, body, github_token)
 
 
 async def _run_init(
