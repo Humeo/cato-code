@@ -89,6 +89,7 @@ _MIGRATIONS = [
     "ALTER TABLE activities ADD COLUMN approval_comment_url TEXT",
     "ALTER TABLE activities ADD COLUMN approved_by TEXT",
     "ALTER TABLE activities ADD COLUMN approved_at TEXT",
+    "ALTER TABLE activities ADD COLUMN cost_usd REAL",
 ]
 
 
@@ -216,6 +217,75 @@ class Store:
                     "SELECT * FROM activities ORDER BY created_at"
                 )
             return cur.fetchall()
+
+    def get_stats(self) -> dict:
+        """Return aggregate stats for the dashboard."""
+        with self._lock:
+            repos_total = self._conn.execute("SELECT COUNT(*) FROM repos").fetchone()[0]
+            repos_watched = self._conn.execute("SELECT COUNT(*) FROM repos WHERE watch=1").fetchone()[0]
+
+            rows = self._conn.execute(
+                "SELECT status, COUNT(*) as cnt, SUM(COALESCE(cost_usd,0)) as cost FROM activities GROUP BY status"
+            ).fetchall()
+
+            by_status: dict[str, int] = {}
+            total_cost: float = 0.0
+            for row in rows:
+                by_status[row["status"]] = row["cnt"]
+                total_cost += row["cost"] or 0.0
+
+            kind_rows = self._conn.execute(
+                "SELECT kind, COUNT(*) as cnt FROM activities GROUP BY kind ORDER BY cnt DESC"
+            ).fetchall()
+            by_kind = {r["kind"]: r["cnt"] for r in kind_rows}
+
+            recent = self._conn.execute(
+                "SELECT * FROM activities ORDER BY updated_at DESC LIMIT 20"
+            ).fetchall()
+
+        return {
+            "repos": {"total": repos_total, "watched": repos_watched},
+            "activities": {
+                "by_status": by_status,
+                "by_kind": by_kind,
+                "total": sum(by_status.values()),
+            },
+            "cost_usd": round(total_cost, 4),
+            "recent_activities": [dict(r) for r in recent],
+        }
+
+    def get_repo_stats(self, repo_id: str) -> dict | None:
+        """Return per-repo stats for the dashboard."""
+        with self._lock:
+            repo = self._conn.execute("SELECT * FROM repos WHERE id=?", (repo_id,)).fetchone()
+            if repo is None:
+                return None
+
+            rows = self._conn.execute(
+                "SELECT status, COUNT(*) as cnt, SUM(COALESCE(cost_usd,0)) as cost FROM activities WHERE repo_id=? GROUP BY status",
+                (repo_id,),
+            ).fetchall()
+
+            by_status: dict[str, int] = {}
+            total_cost: float = 0.0
+            for row in rows:
+                by_status[row["status"]] = row["cnt"]
+                total_cost += row["cost"] or 0.0
+
+            recent = self._conn.execute(
+                "SELECT * FROM activities WHERE repo_id=? ORDER BY updated_at DESC LIMIT 10",
+                (repo_id,),
+            ).fetchall()
+
+        return {
+            "repo": dict(repo),
+            "activities": {
+                "by_status": by_status,
+                "total": sum(by_status.values()),
+            },
+            "cost_usd": round(total_cost, 4),
+            "recent_activities": [dict(r) for r in recent],
+        }
 
     def mark_crashed_activities_failed(self) -> int:
         """On daemon startup, mark any status=running activities as failed (previous crash)."""

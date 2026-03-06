@@ -132,6 +132,7 @@ async def dispatch(
                 status="done",
                 summary=summary,
                 session_id=session_id,
+                cost_usd=cost_usd,
             )
             logger.info("Activity %s completed (cost=$%.4f)", activity_id, cost_usd or 0)
         else:
@@ -140,6 +141,7 @@ async def dispatch(
                 status="failed",
                 summary=summary,
                 session_id=session_id,
+                cost_usd=cost_usd,
             )
             logger.warning("Activity %s failed after %d attempts", activity_id[:8], MAX_RETRIES)
             await _notify_failure(activity, repo, github_token, summary)

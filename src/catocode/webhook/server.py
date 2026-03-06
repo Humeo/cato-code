@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from ..auth import Auth, get_auth
 from ..config import get_github_app_webhook_secret, parse_repo_url, repo_id_from_url
+from ..dashboard import dashboard_html_route, make_router as make_dashboard_router
 from ..decision import decide_engagement
 from ..store import Store
 from .parser import parse_webhook
@@ -26,6 +27,10 @@ class WebhookServer:
         self._store = store
         self._auth = auth or get_auth()
         self.app = FastAPI(title="CatoCode Webhook Server")
+
+        # Dashboard UI + API
+        self.app.get("/")(lambda: dashboard_html_route())
+        self.app.include_router(make_dashboard_router(store))
 
         # Per-repo webhook (personal token mode or manual setup)
         self.app.post("/webhook/github/{repo_id}")(self._handle_webhook)
