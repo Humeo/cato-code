@@ -27,6 +27,11 @@ def get_github_token() -> str:
         return token
 
 
+def get_github_app_webhook_secret() -> str | None:
+    """Get the GitHub App-level webhook secret (GITHUB_APP_WEBHOOK_SECRET)."""
+    return os.environ.get("GITHUB_APP_WEBHOOK_SECRET")
+
+
 def get_git_user_name() -> str:
     """Get git user name from GIT_USER_NAME env var."""
     return os.environ.get("GIT_USER_NAME", "CatoCode")

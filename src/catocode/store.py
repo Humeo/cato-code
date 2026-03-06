@@ -69,6 +69,13 @@ CREATE TABLE IF NOT EXISTS webhook_events (
     received_at TEXT NOT NULL,
     processed INTEGER DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS installations (
+    installation_id TEXT PRIMARY KEY,
+    account_login TEXT NOT NULL,
+    account_type TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 # Migrations: columns added after initial schema
@@ -380,5 +387,41 @@ class Store:
             self._conn.execute(
                 "UPDATE webhook_events SET processed = 1 WHERE event_id = ?",
                 (event_id,),
+            )
+            self._conn.commit()
+
+    # --- GitHub App installations ---
+
+    def add_installation(
+        self,
+        installation_id: str,
+        account_login: str,
+        account_type: str,
+    ) -> None:
+        """Record a GitHub App installation."""
+        with self._lock:
+            self._conn.execute(
+                """INSERT OR REPLACE INTO installations
+                   (installation_id, account_login, account_type, created_at)
+                   VALUES (?, ?, ?, ?)""",
+                (installation_id, account_login, account_type, _now()),
+            )
+            self._conn.commit()
+
+    def get_installation(self, installation_id: str) -> sqlite3.Row | None:
+        """Get a GitHub App installation record."""
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT * FROM installations WHERE installation_id = ?",
+                (installation_id,),
+            )
+            return cur.fetchone()
+
+    def delete_installation(self, installation_id: str) -> None:
+        """Remove a GitHub App installation record."""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM installations WHERE installation_id = ?",
+                (installation_id,),
             )
             self._conn.commit()

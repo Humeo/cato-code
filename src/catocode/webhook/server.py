@@ -9,7 +9,8 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
-from ..config import parse_repo_url
+from ..auth import Auth, get_auth
+from ..config import get_github_app_webhook_secret, parse_repo_url, repo_id_from_url
 from ..decision import decide_engagement
 from ..store import Store
 from .parser import parse_webhook
@@ -21,12 +22,15 @@ logger = logging.getLogger(__name__)
 class WebhookServer:
     """FastAPI server for receiving GitHub webhooks."""
 
-    def __init__(self, store: Store) -> None:
+    def __init__(self, store: Store, auth: Auth | None = None) -> None:
         self._store = store
+        self._auth = auth or get_auth()
         self.app = FastAPI(title="CatoCode Webhook Server")
 
-        # Register routes
+        # Per-repo webhook (personal token mode or manual setup)
         self.app.post("/webhook/github/{repo_id}")(self._handle_webhook)
+        # GitHub App-level webhook (all events from all installations)
+        self.app.post("/webhook/app")(self._handle_app_webhook)
         self.app.get("/webhook/health")(self._health_check)
 
     async def _health_check(self) -> dict[str, str]:
@@ -169,16 +173,10 @@ class WebhookServer:
         })
 
     async def _handle_approval(self, event: Any, payload: dict[str, Any]) -> None:
-        """Handle approval comment by transitioning pending_approval activity to pending.
-
-        Args:
-            event: Webhook event
-            payload: GitHub webhook payload
-        """
-        from ..config import get_github_token, parse_repo_url
+        """Handle approval comment by transitioning pending_approval activity to pending."""
+        from ..config import parse_repo_url
         from ..decision import check_user_is_admin
 
-        # Extract issue/PR number from trigger
         trigger_parts = event.trigger.split(":")
         if len(trigger_parts) < 2:
             logger.warning("Invalid trigger format for approval: %s", event.trigger)
@@ -186,10 +184,8 @@ class WebhookServer:
 
         issue_or_pr = f"{trigger_parts[0]}:{trigger_parts[1]}"
 
-        # Find pending approval activity
         pending_approval = self._store.get_pending_approval_activities()
         matching_activity = None
-
         for activity in pending_approval:
             if activity["trigger"] == issue_or_pr:
                 matching_activity = activity
@@ -199,7 +195,6 @@ class WebhookServer:
             logger.warning("No pending approval activity found for: %s", issue_or_pr)
             return
 
-        # Verify user has admin permissions
         comment_author = event.actor
         repo = self._store.get_repo(event.repo_id)
         if repo is None:
@@ -212,21 +207,13 @@ class WebhookServer:
             logger.error("Invalid repo URL: %s", repo["repo_url"])
             return
 
-        github_token = get_github_token()
-        if not github_token:
-            logger.error("GitHub token not configured")
-            return
-
+        github_token = await self._auth.get_token()
         is_admin = await check_user_is_admin(comment_author, owner, repo_name, github_token)
 
         if not is_admin:
-            logger.warning(
-                "User %s attempted to approve but lacks permissions",
-                comment_author,
-            )
+            logger.warning("User %s attempted to approve but lacks permissions", comment_author)
             return
 
-        # Transition activity to pending (ready to execute)
         comment_url = payload.get("comment", {}).get("html_url", "")
         self._store.update_activity(
             matching_activity["id"],
@@ -235,9 +222,167 @@ class WebhookServer:
             approved_by=comment_author,
             approval_comment_url=comment_url,
         )
+        logger.info("Activity %s approved by %s", matching_activity["id"][:8], comment_author)
 
-        logger.info(
-            "Activity %s approved by %s",
-            matching_activity["id"][:8],
-            comment_author,
+    async def _handle_app_webhook(
+        self,
+        request: Request,
+        x_github_event: str = Header(...),
+        x_github_delivery: str = Header(...),
+        x_hub_signature_256: str | None = Header(None),
+    ) -> Response:
+        """Handle GitHub App-level webhook (installation events + all repo events).
+
+        GitHub sends all App events to this single endpoint with the App's
+        webhook secret, rather than per-repo secrets.
+        """
+        app_secret = get_github_app_webhook_secret()
+        body = await request.body()
+
+        # Verify App-level signature
+        if app_secret:
+            if not x_hub_signature_256:
+                raise HTTPException(status_code=401, detail="Missing signature")
+            if not verify_signature(body, x_hub_signature_256, app_secret):
+                raise HTTPException(status_code=401, detail="Invalid signature")
+
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON")
+
+        # Deduplicate
+        if self._store.is_webhook_event_processed(x_github_delivery):
+            return JSONResponse({"status": "duplicate", "event_id": x_github_delivery})
+
+        # Store raw event for deduplication tracking
+        self._store.add_webhook_event(
+            event_id=x_github_delivery,
+            repo_id="__app__",
+            event_type=x_github_event,
+            payload=json.dumps(payload),
         )
+
+        logger.info("GitHub App webhook: %s (%s)", x_github_event, x_github_delivery)
+
+        # Handle installation lifecycle events
+        if x_github_event == "installation":
+            result = await self._handle_installation_event(payload, x_github_delivery)
+            return JSONResponse(result)
+
+        if x_github_event == "installation_repositories":
+            result = await self._handle_installation_repositories_event(payload, x_github_delivery)
+            return JSONResponse(result)
+
+        # Route regular repo events through the normal webhook pipeline
+        # Identify the repo from the payload
+        repo_info = payload.get("repository")
+        if not repo_info:
+            self._store.mark_webhook_event_processed(x_github_delivery)
+            return JSONResponse({"status": "ignored", "reason": "no repository in payload"})
+
+        repo_url = repo_info.get("html_url", "")
+        try:
+            repo_id = repo_id_from_url(repo_url)
+        except ValueError:
+            self._store.mark_webhook_event_processed(x_github_delivery)
+            return JSONResponse({"status": "ignored", "reason": "invalid repo url"})
+
+        repo = self._store.get_repo(repo_id)
+        if repo is None or not repo["watch"]:
+            self._store.mark_webhook_event_processed(x_github_delivery)
+            return JSONResponse({"status": "ignored", "reason": "repo not watched"})
+
+        # Store and parse
+        self._store.add_webhook_event(
+            event_id=x_github_delivery,
+            repo_id=repo_id,
+            event_type=x_github_event,
+            payload=json.dumps(payload),
+        )
+        event = parse_webhook(x_github_event, payload, x_github_delivery, repo_id)
+        if event is None:
+            self._store.mark_webhook_event_processed(x_github_delivery)
+            return JSONResponse({"status": "ignored", "event_type": x_github_event})
+
+        decision = await decide_engagement(event, repo, self._store)
+        if not decision.should_engage:
+            self._store.mark_webhook_event_processed(x_github_delivery)
+            return JSONResponse({"status": "no_action", "reason": decision.reason})
+
+        if decision.activity_kind == "approve_activity":
+            await self._handle_approval(event, payload)
+            self._store.mark_webhook_event_processed(x_github_delivery)
+            return JSONResponse({"status": "approved"})
+
+        activity_id = self._store.add_activity(repo_id, decision.activity_kind, event.trigger)
+        if decision.requires_approval:
+            self._store.update_activity(activity_id, requires_approval=1)
+
+        self._store.mark_webhook_event_processed(x_github_delivery)
+        return JSONResponse({"status": "created", "activity_id": activity_id, "activity_kind": decision.activity_kind})
+
+    async def _handle_installation_event(self, payload: dict, delivery_id: str) -> dict:
+        """Handle GitHub App installation created/deleted events."""
+        action = payload.get("action")
+        installation = payload.get("installation", {})
+        installation_id = str(installation.get("id", ""))
+        account = installation.get("account", {})
+        account_login = account.get("login", "")
+        account_type = account.get("type", "User")
+        repos = payload.get("repositories", [])
+
+        if action == "created":
+            self._store.add_installation(installation_id, account_login, account_type)
+            watched = []
+            for repo_info in repos:
+                repo_url = f"https://github.com/{repo_info['full_name']}"
+                repo_id = repo_id_from_url(repo_url)
+                self._store.add_repo(repo_id, repo_url)
+                self._store.update_repo(repo_id, watch=1)
+                watched.append(repo_id)
+                logger.info("Auto-watched repo from App installation: %s", repo_id)
+            self._store.mark_webhook_event_processed(delivery_id)
+            return {"status": "installation_created", "watched_repos": watched}
+
+        elif action == "deleted":
+            watched_repos = [
+                r["id"] for r in self._store.list_watched_repos()
+                if r["repo_url"].startswith(f"https://github.com/{account_login}/")
+            ]
+            for repo_id in watched_repos:
+                self._store.update_repo(repo_id, watch=0)
+            self._store.delete_installation(installation_id)
+            self._store.mark_webhook_event_processed(delivery_id)
+            logger.info("App uninstalled by %s, unwatched %d repos", account_login, len(watched_repos))
+            return {"status": "installation_deleted", "unwatched_repos": watched_repos}
+
+        self._store.mark_webhook_event_processed(delivery_id)
+        return {"status": "ignored", "action": action}
+
+    async def _handle_installation_repositories_event(self, payload: dict, delivery_id: str) -> dict:
+        """Handle repos being added/removed from an existing GitHub App installation."""
+        action = payload.get("action")
+        added = payload.get("repositories_added", [])
+        removed = payload.get("repositories_removed", [])
+
+        watched, unwatched = [], []
+
+        for repo_info in added:
+            repo_url = f"https://github.com/{repo_info['full_name']}"
+            repo_id = repo_id_from_url(repo_url)
+            self._store.add_repo(repo_id, repo_url)
+            self._store.update_repo(repo_id, watch=1)
+            watched.append(repo_id)
+            logger.info("Auto-watched repo added to installation: %s", repo_id)
+
+        for repo_info in removed:
+            repo_url = f"https://github.com/{repo_info['full_name']}"
+            repo_id = repo_id_from_url(repo_url)
+            self._store.update_repo(repo_id, watch=0)
+            unwatched.append(repo_id)
+            logger.info("Auto-unwatched repo removed from installation: %s", repo_id)
+
+        self._store.mark_webhook_event_processed(delivery_id)
+        return {"status": "repositories_updated", "watched": watched, "unwatched": unwatched}
+
