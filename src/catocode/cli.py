@@ -70,7 +70,7 @@ async def cmd_watch(args: argparse.Namespace) -> int:
     repo_url = args.repo_url
     try:
         from .config import parse_repo_url
-        parse_repo_url(repo_url)  # Validate
+        owner, repo_name = parse_repo_url(repo_url)
     except ValueError as e:
         console.print(f"[red]Error:[/red] {e}")
         return 1
@@ -86,6 +86,18 @@ async def cmd_watch(args: argparse.Namespace) -> int:
     except RuntimeError as e:
         console.print(f"[red]Error:[/red] {e}")
         return 1
+
+    # Check write access before registering
+    from .github.permissions import check_repo_write_access
+    console.print(f"[dim]Checking permissions for {owner}/{repo_name}...[/dim]")
+    has_access, reason = await check_repo_write_access(owner, repo_name, github_token)
+    if not has_access:
+        console.print(f"[red]Permission denied:[/red] {reason}")
+        console.print(
+            "[dim]CatoCode needs write access to post comments and open PRs.[/dim]"
+        )
+        return 1
+    console.print(f"[dim]✓ {reason}[/dim]")
 
     # Register and mark as watched
     store.add_repo(repo_id, repo_url)

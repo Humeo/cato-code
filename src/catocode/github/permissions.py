@@ -1,0 +1,100 @@
+"""GitHub permission checking utilities."""
+
+from __future__ import annotations
+
+import logging
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+GITHUB_API = "https://api.github.com"
+
+
+def _headers(github_token: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {github_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+async def get_authenticated_user(github_token: str) -> str | None:
+    """Return the login name of the authenticated GitHub token owner."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{GITHUB_API}/user",
+                headers=_headers(github_token),
+                timeout=10.0,
+            )
+            if response.status_code == 200:
+                return response.json().get("login")
+            logger.debug("GET /user returned %s", response.status_code)
+    except Exception as e:
+        logger.error("Failed to get authenticated user: %s", e)
+    return None
+
+
+async def check_repo_permission(
+    owner: str,
+    repo: str,
+    username: str,
+    github_token: str,
+) -> str | None:
+    """Return the permission level of *username* on *owner/repo*.
+
+    Returns one of: "admin", "write", "read", "none", or None on error.
+    """
+    url = f"{GITHUB_API}/repos/{owner}/{repo}/collaborators/{username}/permission"
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url,
+                headers=_headers(github_token),
+                timeout=10.0,
+            )
+            if response.status_code == 200:
+                return response.json().get("permission")
+            if response.status_code == 404:
+                # User is not a collaborator → no permission
+                return "none"
+            logger.debug("Permission check returned %s", response.status_code)
+    except Exception as e:
+        logger.error("Failed to check repo permission: %s", e)
+    return None
+
+
+async def check_repo_write_access(
+    owner: str,
+    repo: str,
+    github_token: str,
+) -> tuple[bool, str]:
+    """Check whether the token has write access to *owner/repo*.
+
+    Returns (has_access, message) where message explains the result.
+    """
+    if not github_token:
+        return False, "GITHUB_TOKEN is not set"
+
+    username = await get_authenticated_user(github_token)
+    if not username:
+        return False, "Could not verify GitHub token (invalid or expired?)"
+
+    # Repo owner always has full access
+    if username.lower() == owner.lower():
+        return True, f"Authenticated as repo owner @{username}"
+
+    permission = await check_repo_permission(owner, repo, username, github_token)
+
+    if permission is None:
+        return False, f"Could not check permissions for @{username} on {owner}/{repo}"
+
+    if permission in ("admin", "write"):
+        return True, f"@{username} has '{permission}' access to {owner}/{repo}"
+
+    return (
+        False,
+        f"@{username} only has '{permission}' access to {owner}/{repo} "
+        f"(write or admin required)",
+    )
