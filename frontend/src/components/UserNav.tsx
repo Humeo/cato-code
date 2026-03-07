@@ -1,7 +1,6 @@
 "use client";
 
 import { logout } from "@/lib/api";
-import { useRouter } from "next/navigation";
 import type { User } from "@/lib/types";
 
 interface UserNavProps {
@@ -9,12 +8,10 @@ interface UserNavProps {
 }
 
 export function UserNav({ user }: UserNavProps) {
-  const router = useRouter();
-
   async function handleLogout() {
     await logout();
-    router.push("/");
-    router.refresh();
+    // Full page reload to bypass Next.js router cache
+    window.location.href = "/";
   }
 
   return (
