@@ -6,6 +6,9 @@ import logging
 import sys
 import time
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table

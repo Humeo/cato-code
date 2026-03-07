@@ -12,6 +12,7 @@ dependencies = [
     "pyjwt>=2.11.0",
     "cryptography>=46.0.5",
     "psycopg2-binary>=2.9.11",
+    "python-dotenv>=1.2.2",
 ]
 
 [project.scripts]
