@@ -8,6 +8,31 @@ from .db import Connection, connect
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    github_id INTEGER NOT NULL UNIQUE,
+    github_login TEXT NOT NULL,
+    github_email TEXT,
+    avatar_url TEXT,
+    access_token TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_login_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS oauth_states (
+    state TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    used INTEGER DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS repos (
     id TEXT PRIMARY KEY,
     repo_url TEXT NOT NULL,
@@ -90,6 +115,8 @@ _MIGRATIONS = [
     "ALTER TABLE activities ADD COLUMN approved_by TEXT",
     "ALTER TABLE activities ADD COLUMN approved_at TEXT",
     "ALTER TABLE activities ADD COLUMN cost_usd REAL",
+    "ALTER TABLE repos ADD COLUMN user_id TEXT",
+    "ALTER TABLE installations ADD COLUMN user_id TEXT",
 ]
 
 
@@ -133,7 +160,11 @@ class Store:
     def get_repo(self, repo_id: str) -> dict | None:
         return self._db.execute_one("SELECT * FROM repos WHERE id = ?", (repo_id,))
 
-    def list_repos(self) -> list[dict]:
+    def list_repos(self, user_id: str | None = None) -> list[dict]:
+        if user_id is not None:
+            return self._db.execute(
+                "SELECT * FROM repos WHERE user_id = ? ORDER BY created_at", (user_id,)
+            )
         return self._db.execute("SELECT * FROM repos ORDER BY created_at")
 
     def list_watched_repos(self) -> list[dict]:
@@ -185,36 +216,64 @@ class Store:
             "SELECT * FROM activities WHERE status = 'running' ORDER BY created_at"
         )
 
-    def list_activities(self, repo_id: str | None = None) -> list[dict]:
+    def list_activities(self, repo_id: str | None = None, user_id: str | None = None) -> list[dict]:
         if repo_id is not None:
             return self._db.execute(
                 "SELECT * FROM activities WHERE repo_id = ? ORDER BY created_at",
                 (repo_id,),
             )
+        if user_id is not None:
+            return self._db.execute(
+                "SELECT a.* FROM activities a JOIN repos r ON a.repo_id = r.id "
+                "WHERE r.user_id = ? ORDER BY a.created_at",
+                (user_id,),
+            )
         return self._db.execute("SELECT * FROM activities ORDER BY created_at")
 
-    def get_stats(self) -> dict:
+    def get_stats(self, user_id: str | None = None) -> dict:
         """Return aggregate stats for the dashboard."""
-        repos_total = (self._db.execute_one("SELECT COUNT(*) as c FROM repos") or {}).get("c", 0)
-        repos_watched = (self._db.execute_one("SELECT COUNT(*) as c FROM repos WHERE watch=1") or {}).get("c", 0)
-
-        rows = self._db.execute(
-            "SELECT status, COUNT(*) as cnt, SUM(COALESCE(cost_usd,0)) as cost FROM activities GROUP BY status"
-        )
+        if user_id is not None:
+            repos_total = (self._db.execute_one(
+                "SELECT COUNT(*) as c FROM repos WHERE user_id = ?", (user_id,)
+            ) or {}).get("c", 0)
+            repos_watched = (self._db.execute_one(
+                "SELECT COUNT(*) as c FROM repos WHERE watch=1 AND user_id = ?", (user_id,)
+            ) or {}).get("c", 0)
+            rows = self._db.execute(
+                "SELECT a.status, COUNT(*) as cnt, SUM(COALESCE(a.cost_usd,0)) as cost "
+                "FROM activities a JOIN repos r ON a.repo_id = r.id "
+                "WHERE r.user_id = ? GROUP BY a.status",
+                (user_id,),
+            )
+            kind_rows = self._db.execute(
+                "SELECT a.kind, COUNT(*) as cnt FROM activities a JOIN repos r ON a.repo_id = r.id "
+                "WHERE r.user_id = ? GROUP BY a.kind ORDER BY cnt DESC",
+                (user_id,),
+            )
+            recent = self._db.execute(
+                "SELECT a.* FROM activities a JOIN repos r ON a.repo_id = r.id "
+                "WHERE r.user_id = ? ORDER BY a.updated_at DESC LIMIT 20",
+                (user_id,),
+            )
+        else:
+            repos_total = (self._db.execute_one("SELECT COUNT(*) as c FROM repos") or {}).get("c", 0)
+            repos_watched = (self._db.execute_one("SELECT COUNT(*) as c FROM repos WHERE watch=1") or {}).get("c", 0)
+            rows = self._db.execute(
+                "SELECT status, COUNT(*) as cnt, SUM(COALESCE(cost_usd,0)) as cost FROM activities GROUP BY status"
+            )
+            kind_rows = self._db.execute(
+                "SELECT kind, COUNT(*) as cnt FROM activities GROUP BY kind ORDER BY cnt DESC"
+            )
+            recent = self._db.execute(
+                "SELECT * FROM activities ORDER BY updated_at DESC LIMIT 20"
+            )
         by_status: dict[str, int] = {}
         total_cost: float = 0.0
         for row in rows:
             by_status[row["status"]] = row["cnt"]
             total_cost += row["cost"] or 0.0
 
-        kind_rows = self._db.execute(
-            "SELECT kind, COUNT(*) as cnt FROM activities GROUP BY kind ORDER BY cnt DESC"
-        )
         by_kind = {r["kind"]: r["cnt"] for r in kind_rows}
-
-        recent = self._db.execute(
-            "SELECT * FROM activities ORDER BY updated_at DESC LIMIT 20"
-        )
 
         return {
             "repos": {"total": repos_total, "watched": repos_watched},
@@ -443,3 +502,95 @@ class Store:
             "DELETE FROM installations WHERE installation_id = ?", (installation_id,)
         )
         self._db.commit()
+
+    def link_installation_to_user(self, installation_id: str, user_id: str) -> None:
+        """Associate a GitHub App installation with a user."""
+        self._db.execute(
+            "UPDATE installations SET user_id = ? WHERE installation_id = ?",
+            (user_id, installation_id),
+        )
+        self._db.commit()
+
+    def get_user_id_for_installation(self, installation_id: str) -> str | None:
+        """Return user_id associated with an installation, or None."""
+        row = self._db.execute_one(
+            "SELECT user_id FROM installations WHERE installation_id = ?", (installation_id,)
+        )
+        return row["user_id"] if row else None
+
+    # --- users ---
+
+    def create_user(
+        self,
+        user_id: str,
+        github_id: int,
+        github_login: str,
+        github_email: str | None,
+        avatar_url: str | None,
+        access_token: str,
+    ) -> None:
+        now = _now()
+        self._db.execute(
+            """INSERT INTO users (id, github_id, github_login, github_email, avatar_url,
+               access_token, created_at, last_login_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, github_id, github_login, github_email, avatar_url, access_token, now, now),
+        )
+        self._db.commit()
+
+    def get_user_by_github_id(self, github_id: int) -> dict | None:
+        return self._db.execute_one(
+            "SELECT * FROM users WHERE github_id = ?", (github_id,)
+        )
+
+    def get_user(self, user_id: str) -> dict | None:
+        return self._db.execute_one("SELECT * FROM users WHERE id = ?", (user_id,))
+
+    def update_user_last_login(self, user_id: str, access_token: str) -> None:
+        self._db.execute(
+            "UPDATE users SET last_login_at = ?, access_token = ? WHERE id = ?",
+            (_now(), access_token, user_id),
+        )
+        self._db.commit()
+
+    # --- sessions ---
+
+    def create_session(self, token: str, user_id: str, expires_at: str) -> None:
+        self._db.execute(
+            "INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+            (token, user_id, expires_at, _now()),
+        )
+        self._db.commit()
+
+    def get_session(self, token: str) -> dict | None:
+        return self._db.execute_one(
+            "SELECT * FROM sessions WHERE token = ?", (token,)
+        )
+
+    def delete_session(self, token: str) -> None:
+        self._db.execute("DELETE FROM sessions WHERE token = ?", (token,))
+        self._db.commit()
+
+    # --- oauth CSRF states ---
+
+    def create_oauth_state(self, state: str) -> None:
+        self._db.execute(
+            "INSERT INTO oauth_states (state, created_at, used) VALUES (?, ?, 0)",
+            (state, _now()),
+        )
+        self._db.commit()
+
+    def consume_oauth_state(self, state: str) -> bool:
+        """Validate and consume a CSRF nonce. Returns True if valid (not used, <10 min old)."""
+        from datetime import timedelta
+        row = self._db.execute_one(
+            "SELECT * FROM oauth_states WHERE state = ? AND used = 0", (state,)
+        )
+        if row is None:
+            return False
+        created = datetime.fromisoformat(row["created_at"])
+        if datetime.now(timezone.utc) - created > timedelta(minutes=10):
+            return False
+        self._db.execute("UPDATE oauth_states SET used = 1 WHERE state = ?", (state,))
+        self._db.commit()
+        return True

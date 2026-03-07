@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from .auth import Auth, get_auth
 from .config import get_anthropic_api_key, get_anthropic_base_url, get_patrol_config, parse_repo_url
 from .container.manager import ContainerManager
+from .container.registry import ContainerRegistry
 from .decision import check_user_is_admin
 from .dispatcher import dispatch
 from .store import Store
@@ -35,13 +36,19 @@ class Scheduler:
     def __init__(
         self,
         store: Store,
-        container_mgr: ContainerManager,
+        container_mgr: ContainerManager | None = None,
         max_concurrent: int = MAX_CONCURRENT,
         verbose: bool = False,
         auth: Auth | None = None,
     ) -> None:
         self._store = store
-        self._container_mgr = container_mgr
+        # Support both legacy single-manager (CLI) and per-user registry (SaaS)
+        if container_mgr is not None:
+            self._container_mgr = container_mgr
+            self._registry: ContainerRegistry | None = None
+        else:
+            self._container_mgr = None
+            self._registry = ContainerRegistry()
         self._max_concurrent = max_concurrent
         self._verbose = verbose
         self._auth = auth or get_auth()
@@ -280,11 +287,23 @@ class Scheduler:
                 if activity is None or activity["status"] != "pending":
                     return
 
+                # Resolve container manager: per-user registry or legacy single manager
+                if self._registry is not None:
+                    repo = self._store.get_repo(repo_id)
+                    user_id = repo.get("user_id") if repo else None
+                    if user_id:
+                        container_mgr = self._registry.get(user_id)
+                    else:
+                        # Fallback: legacy container for CLI-mode repos without user_id
+                        container_mgr = ContainerManager()
+                else:
+                    container_mgr = self._container_mgr
+
                 try:
                     await dispatch(
                         activity_id=activity_id,
                         store=self._store,
-                        container_mgr=self._container_mgr,
+                        container_mgr=container_mgr,
                         anthropic_api_key=get_anthropic_api_key(),
                         github_token=await self._auth.get_token(),
                         anthropic_base_url=get_anthropic_base_url(),

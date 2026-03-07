@@ -73,9 +73,32 @@ async def check_repo_write_access(
     """Check whether the token has write access to *owner/repo*.
 
     Returns (has_access, message) where message explains the result.
+    Supports both PAT/OAuth tokens and GitHub App installation tokens (ghs_).
     """
     if not github_token:
         return False, "GITHUB_TOKEN is not set"
+
+    # GitHub App installation tokens (ghs_) don't support /user endpoint.
+    # Verify by checking if the repo is accessible via the installation.
+    if github_token.startswith("ghs_"):
+        try:
+            async with httpx.AsyncClient() as client:
+                # /installation/repositories lists all repos the App can access
+                response = await client.get(
+                    f"{GITHUB_API}/installation/repositories",
+                    headers=_headers(github_token),
+                    params={"per_page": 100},
+                    timeout=10.0,
+                )
+                if response.status_code == 200:
+                    repos = response.json().get("repositories", [])
+                    accessible = [r["full_name"].lower() for r in repos]
+                    if f"{owner}/{repo}".lower() in accessible:
+                        return True, f"GitHub App has access to {owner}/{repo}"
+                    return False, f"GitHub App is not installed on {owner}/{repo}"
+                return False, f"GitHub App token invalid (HTTP {response.status_code})"
+        except Exception as e:
+            return False, f"Failed to verify App access: {e}"
 
     username = await get_authenticated_user(github_token)
     if not username:

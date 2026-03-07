@@ -32,6 +32,45 @@ def get_github_app_webhook_secret() -> str | None:
     return os.environ.get("GITHUB_APP_WEBHOOK_SECRET")
 
 
+def get_github_oauth_client_id() -> str:
+    """Get GitHub OAuth App client ID."""
+    v = os.environ.get("GITHUB_OAUTH_CLIENT_ID")
+    if not v:
+        raise RuntimeError("GITHUB_OAUTH_CLIENT_ID environment variable not set")
+    return v
+
+
+def get_github_oauth_client_secret() -> str:
+    """Get GitHub OAuth App client secret."""
+    v = os.environ.get("GITHUB_OAUTH_CLIENT_SECRET")
+    if not v:
+        raise RuntimeError("GITHUB_OAUTH_CLIENT_SECRET environment variable not set")
+    return v
+
+
+def get_session_secret_key() -> str:
+    """Get session secret key (32+ byte hex) for Fernet encryption and session signing."""
+    v = os.environ.get("SESSION_SECRET_KEY")
+    if not v:
+        raise RuntimeError("SESSION_SECRET_KEY environment variable not set")
+    return v
+
+
+def get_frontend_url() -> str:
+    """Get frontend URL for CORS and redirects."""
+    return os.environ.get("FRONTEND_URL", "http://localhost:3000")
+
+
+def get_base_url() -> str:
+    """Get backend base URL."""
+    return os.environ.get("CATOCODE_BASE_URL", "http://localhost:8000")
+
+
+def get_github_app_name() -> str:
+    """Get GitHub App name for install URL."""
+    return os.environ.get("GITHUB_APP_NAME", "catocode-bot")
+
+
 def get_git_user_name() -> str:
     """Get git user name from GIT_USER_NAME env var."""
     return os.environ.get("GIT_USER_NAME", "CatoCode")

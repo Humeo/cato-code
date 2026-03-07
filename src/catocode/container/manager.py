@@ -57,15 +57,26 @@ class ExecResult:
 
 
 class ContainerManager:
-    def __init__(self) -> None:
+    def __init__(self, user_id: str | None = None) -> None:
         try:
             self._client = docker.from_env()
         except docker.errors.DockerException as e:
             raise RuntimeError(f"Cannot connect to Docker: {e}") from e
 
+        # Per-user naming for SaaS; falls back to legacy single-container names for CLI mode
+        if user_id:
+            suffix = user_id[:8]
+            self._container_name = f"catocode-worker-{suffix}"
+            self._repos_volume = f"catocode-repos-{suffix}"
+            self._output_volume = f"catocode-output-{suffix}"
+        else:
+            self._container_name = CONTAINER_NAME
+            self._repos_volume = "catocode-repos"
+            self._output_volume = "catocode-output"
+
     def _get_container(self) -> docker.models.containers.Container | None:
         try:
-            return self._client.containers.get(CONTAINER_NAME)
+            return self._client.containers.get(self._container_name)
         except docker.errors.NotFound:
             return None
 
@@ -148,7 +159,7 @@ class ContainerManager:
         env = _container_env(anthropic_api_key, github_token, anthropic_base_url)
         self._client.containers.run(
             IMAGE_NAME,
-            name=CONTAINER_NAME,
+            name=self._container_name,
             command="sleep infinity",
             detach=True,
             remove=False,
@@ -157,14 +168,14 @@ class ContainerManager:
             cpu_quota=CPU_QUOTA,
             network_mode="bridge",
             volumes={
-                "catocode-repos": {"bind": "/repos", "mode": "rw"},
-                "catocode-output": {"bind": "/output", "mode": "rw"},
+                self._repos_volume: {"bind": "/repos", "mode": "rw"},
+                self._output_volume: {"bind": "/output", "mode": "rw"},
             },
             environment=env,
         )
-        logger.info("Container %s started", CONTAINER_NAME)
+        logger.info("Container %s started", self._container_name)
         # Fix volume ownership (named volumes may be initialized as root)
-        self._client.containers.get(CONTAINER_NAME).exec_run(
+        self._client.containers.get(self._container_name).exec_run(
             cmd=["chown", "-R", "catocode:catocode", "/repos", "/output"],
             user="root",
         )
@@ -284,7 +295,7 @@ class ContainerManager:
         if container is not None:
             try:
                 container.stop(timeout=10)
-                logger.info("Container %s stopped", CONTAINER_NAME)
+                logger.info("Container %s stopped", self._container_name)
             except docker.errors.NotFound:
                 pass
 

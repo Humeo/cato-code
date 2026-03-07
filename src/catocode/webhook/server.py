@@ -68,24 +68,24 @@ class WebhookServer:
             logger.warning("Webhook received for unknown repo: %s", repo_id)
             raise HTTPException(status_code=404, detail="Repository not found")
 
-        # Get webhook secret
+        # Get webhook secret (optional — if not configured, skip signature verification)
         webhook_config = self._store.get_webhook_config(repo_id)
-        if webhook_config is None:
-            logger.warning("No webhook config for repo: %s", repo_id)
-            raise HTTPException(status_code=404, detail="Webhook not configured")
 
         # Read raw body for signature verification
         body = await request.body()
 
-        # Verify signature
-        if x_hub_signature_256:
+        # Verify signature only if a secret is configured
+        if webhook_config and webhook_config.get("webhook_secret"):
             secret = webhook_config["webhook_secret"]
-            if not verify_signature(body, x_hub_signature_256, secret):
-                logger.warning("Invalid webhook signature for repo: %s", repo_id)
-                raise HTTPException(status_code=401, detail="Invalid signature")
+            if x_hub_signature_256:
+                if not verify_signature(body, x_hub_signature_256, secret):
+                    logger.warning("Invalid webhook signature for repo: %s", repo_id)
+                    raise HTTPException(status_code=401, detail="Invalid signature")
+            else:
+                logger.warning("Missing webhook signature for repo: %s", repo_id)
+                raise HTTPException(status_code=401, detail="Missing signature")
         else:
-            logger.warning("Missing webhook signature for repo: %s", repo_id)
-            raise HTTPException(status_code=401, detail="Missing signature")
+            logger.debug("No webhook secret configured for %s, skipping signature check", repo_id)
 
         # Parse JSON payload
         try:
@@ -345,6 +345,10 @@ class WebhookServer:
                 repo_id = repo_id_from_url(repo_url)
                 self._store.add_repo(repo_id, repo_url)
                 self._store.update_repo(repo_id, watch=1)
+                # Link repo to user if installation is associated with one
+                user_id = self._store.get_user_id_for_installation(installation_id)
+                if user_id:
+                    self._store.update_repo(repo_id, user_id=user_id)
                 watched.append(repo_id)
                 logger.info("Auto-watched repo from App installation: %s", repo_id)
             self._store.mark_webhook_event_processed(delivery_id)
@@ -378,6 +382,12 @@ class WebhookServer:
             repo_id = repo_id_from_url(repo_url)
             self._store.add_repo(repo_id, repo_url)
             self._store.update_repo(repo_id, watch=1)
+            # Propagate user_id from installation
+            installation = payload.get("installation", {})
+            installation_id = str(installation.get("id", ""))
+            user_id = self._store.get_user_id_for_installation(installation_id)
+            if user_id:
+                self._store.update_repo(repo_id, user_id=user_id)
             watched.append(repo_id)
             logger.info("Auto-watched repo added to installation: %s", repo_id)
 
