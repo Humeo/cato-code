@@ -16,7 +16,7 @@ function CatLogo() {
     <img
       src="/logo.svg"
       alt="CatoCode"
-      className="w-24 h-24 glow-accent rounded-2xl"
+      className="w-24 h-24 mx-auto glow-accent rounded-2xl"
     />
   );
 }
