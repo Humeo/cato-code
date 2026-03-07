@@ -17,9 +17,7 @@ export default async function DashboardLayout({
     <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8">
       {/* Header */}
       <header className="glass rounded-xl px-5 py-4 mb-8 flex items-center gap-4">
-        <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-gradient-to-br from-accent to-purple-500 flex-shrink-0">
-          <span className="text-xl leading-none">🐱</span>
-        </div>
+        <img src="/logo.svg" alt="CatoCode" className="w-10 h-10 rounded-lg flex-shrink-0" />
         <div className="min-w-0">
           <h1 className="text-lg font-bold text-white tracking-tight">
             Cato<span className="text-accent-light">Code</span>

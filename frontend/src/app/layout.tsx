@@ -13,6 +13,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
+      <head>
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+      </head>
       <body className="bg-surface-0 text-gray-200 min-h-screen antialiased">
         <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
           <div className="absolute -top-[40%] -left-[20%] w-[60%] h-[60%] rounded-full bg-accent/5 blur-[120px]" />

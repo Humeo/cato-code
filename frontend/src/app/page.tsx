@@ -13,9 +13,11 @@ function GitHubIcon({ className }: { className?: string }) {
 
 function CatLogo() {
   return (
-    <div className="relative inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-accent to-purple-500 glow-accent">
-      <span className="text-4xl leading-none select-none">🐱</span>
-    </div>
+    <img
+      src="/logo.svg"
+      alt="CatoCode"
+      className="w-24 h-24 glow-accent rounded-2xl"
+    />
   );
 }
 
