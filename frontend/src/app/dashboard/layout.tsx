@@ -1,6 +1,7 @@
 import { getMe } from "@/lib/api";
 import { redirect } from "next/navigation";
 import { UserNav } from "@/components/UserNav";
+import Link from "next/link";
 
 export default async function DashboardLayout({
   children,
@@ -29,6 +30,16 @@ export default async function DashboardLayout({
             <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-xs text-gray-500 hidden sm:inline">Online</span>
           </div>
+          <div className="w-px h-6 bg-border-subtle" />
+          <Link
+            href="/install"
+            className="text-xs text-gray-400 hover:text-white border border-border-subtle hover:border-accent/50 px-3 py-1.5 rounded-lg transition-colors hidden sm:inline-flex items-center gap-1.5"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+            Add Repos
+          </Link>
           <div className="w-px h-6 bg-border-subtle" />
           <UserNav user={user} />
         </div>
