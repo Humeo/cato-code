@@ -38,23 +38,12 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      {/* Live-updating stats + activities */}
+      {/* Live-updating stats + repos + activities */}
       <LiveDashboard
         initialStats={stats}
         initialActivities={stats?.recent_activities ?? activities ?? []}
+        initialRepos={repos ?? []}
       />
-
-      {/* Repos */}
-      <section className="glass rounded-xl p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-gray-300 flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-accent" />
-            Watched Repositories
-          </h2>
-          <span className="text-xs text-gray-600">{repos?.length ?? 0} repos</span>
-        </div>
-        <RepoList repos={repos ?? []} />
-      </section>
     </div>
   );
 }

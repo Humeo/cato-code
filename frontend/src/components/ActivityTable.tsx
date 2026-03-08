@@ -14,9 +14,10 @@ const STATUS_STYLES: Record<string, string> = {
 
 interface ActivityTableProps {
   activities: Activity[];
+  hideRepo?: boolean;
 }
 
-export function ActivityTable({ activities }: ActivityTableProps) {
+export function ActivityTable({ activities, hideRepo = false }: ActivityTableProps) {
   const router = useRouter();
 
   if (!activities.length) {
@@ -33,7 +34,9 @@ export function ActivityTable({ activities }: ActivityTableProps) {
       <table className="w-full text-xs">
         <thead>
           <tr className="text-gray-500 border-b border-border-subtle">
-            <th className="text-left py-2.5 pr-4 font-medium uppercase tracking-wider">Repo</th>
+            {!hideRepo && (
+              <th className="text-left py-2.5 pr-4 font-medium uppercase tracking-wider">Repo</th>
+            )}
             <th className="text-left py-2.5 pr-4 font-medium uppercase tracking-wider">Kind</th>
             <th className="text-left py-2.5 pr-4 font-medium uppercase tracking-wider">Trigger</th>
             <th className="text-left py-2.5 pr-4 font-medium uppercase tracking-wider">Status</th>
@@ -51,7 +54,9 @@ export function ActivityTable({ activities }: ActivityTableProps) {
                 onClick={() => router.push(`/dashboard/activity/${a.id}`)}
                 className="text-gray-400 border-b border-border-subtle/50 hover:bg-white/[0.03] transition-colors cursor-pointer"
               >
-                <td className="py-2.5 pr-4 text-gray-300 font-medium">{a.repo_id}</td>
+                {!hideRepo && (
+                  <td className="py-2.5 pr-4 text-gray-300 font-medium">{a.repo_id}</td>
+                )}
                 <td className="py-2.5 pr-4">{a.kind}</td>
                 <td className="py-2.5 pr-4 font-mono text-gray-500">{a.trigger ?? ""}</td>
                 <td className="py-2.5 pr-4">

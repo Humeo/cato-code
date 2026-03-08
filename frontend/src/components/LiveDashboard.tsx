@@ -1,17 +1,19 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import type { Stats, Activity } from "@/lib/types";
+import type { Stats, Activity, Repo } from "@/lib/types";
 import { getStats, getActivities } from "@/lib/api";
 import { StatCard } from "@/components/StatCard";
-import { ActivityTable } from "@/components/ActivityTable";
+import { RepoList } from "@/components/RepoList";
+import { GroupedActivityTable } from "@/components/GroupedActivityTable";
 
 interface LiveDashboardProps {
   initialStats: Stats | null;
   initialActivities: Activity[];
+  initialRepos: Repo[];
 }
 
-export function LiveDashboard({ initialStats, initialActivities }: LiveDashboardProps) {
+export function LiveDashboard({ initialStats, initialActivities, initialRepos }: LiveDashboardProps) {
   const [stats, setStats] = useState<Stats | null>(initialStats);
   const [activities, setActivities] = useState<Activity[]>(initialActivities);
 
@@ -28,6 +30,8 @@ export function LiveDashboard({ initialStats, initialActivities }: LiveDashboard
     const interval = setInterval(refresh, 5000);
     return () => clearInterval(interval);
   }, [refresh]);
+
+  const displayActivities = stats?.recent_activities ?? activities;
 
   return (
     <>
@@ -59,7 +63,21 @@ export function LiveDashboard({ initialStats, initialActivities }: LiveDashboard
         </div>
       )}
 
-      {/* Recent Activities */}
+      {/* Watched Repositories — above activities */}
+      <section className="glass rounded-xl p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-gray-300 flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-accent" />
+            Watched Repositories
+          </h2>
+          <span className="text-xs text-gray-600">
+            {initialRepos.length} repos
+          </span>
+        </div>
+        <RepoList repos={initialRepos} />
+      </section>
+
+      {/* Recent Activities — grouped by repo */}
       <section className="glass rounded-xl p-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold text-gray-300 flex items-center gap-2">
@@ -67,10 +85,10 @@ export function LiveDashboard({ initialStats, initialActivities }: LiveDashboard
             Recent Activities
           </h2>
           <span className="text-xs text-gray-600">
-            {activities.length} entries
+            {displayActivities.length} entries
           </span>
         </div>
-        <ActivityTable activities={stats?.recent_activities ?? activities} />
+        <GroupedActivityTable activities={displayActivities} repos={initialRepos} />
       </section>
     </>
   );
