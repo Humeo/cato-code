@@ -80,3 +80,15 @@ export async function logout(): Promise<void> {
     // Ignore network/CORS errors — still clear local state
   }
 }
+
+export async function deleteRepo(repoId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_URL}/api/repos/${repoId}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

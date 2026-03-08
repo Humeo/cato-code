@@ -75,6 +75,17 @@ def make_router(store: Store) -> APIRouter:
             raise HTTPException(status_code=403, detail="Access denied")
         return [dict(log) for log in store.get_logs(activity_id)]
 
+    @r.delete("/repos/{repo_id}")
+    async def delete_repo(repo_id: str, current_user: CurrentUser) -> dict:
+        repo = store.get_repo(repo_id)
+        if repo is None:
+            raise HTTPException(status_code=404, detail="Repo not found")
+        if repo.get("user_id") != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        store.delete_repo(repo_id)
+        logger.info("User %s deleted repo %s", current_user["id"][:8], repo_id)
+        return {"status": "deleted"}
+
     @r.get("/install-url")
     async def get_install_url(current_user: CurrentUser) -> dict:
         from ..config import get_github_app_name

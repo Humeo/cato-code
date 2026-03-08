@@ -178,6 +178,10 @@ class Store:
         self._db.execute(f"UPDATE repos SET {set_clause} WHERE id = ?", values)
         self._db.commit()
 
+    def delete_repo(self, repo_id: str) -> None:
+        self._db.execute("DELETE FROM repos WHERE id = ?", (repo_id,))
+        self._db.commit()
+
     # --- activities ---
 
     def add_activity(self, repo_id: str, kind: str, trigger: str | None = None) -> str:
