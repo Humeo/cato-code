@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from ..store import Store
@@ -15,6 +17,13 @@ from .deps import CurrentUser
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["api"])
+
+
+class PatrolSettings(BaseModel):
+    patrol_enabled: bool
+    patrol_interval_hours: int = 12
+    patrol_max_issues: int = 5
+    patrol_window_hours: int = 12
 
 
 def _get_store_from_app(router_instance: APIRouter) -> Store:
@@ -150,5 +159,84 @@ def make_router(store: Store) -> APIRouter:
             f"?state={current_user['id']}"
         )
         return {"url": url}
+
+    # --- Patrol endpoints ---
+
+    @r.patch("/repos/{repo_id}/patrol")
+    async def update_patrol_settings(
+        repo_id: str, settings: PatrolSettings, current_user: CurrentUser
+    ) -> dict:
+        repo = store.get_repo(repo_id)
+        if repo is None:
+            raise HTTPException(status_code=404, detail="Repo not found")
+        if repo.get("user_id") != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        store.update_patrol_settings(
+            repo_id=repo_id,
+            enabled=settings.patrol_enabled,
+            interval_hours=settings.patrol_interval_hours,
+            max_issues=settings.patrol_max_issues,
+            window_hours=settings.patrol_window_hours,
+        )
+        logger.info(
+            "User %s updated patrol settings for %s: enabled=%s",
+            current_user["id"][:8],
+            repo_id,
+            settings.patrol_enabled,
+        )
+        return {"status": "updated"}
+
+    @r.post("/repos/{repo_id}/patrol/trigger")
+    async def trigger_patrol(repo_id: str, current_user: CurrentUser) -> dict:
+        repo = store.get_repo(repo_id)
+        if repo is None:
+            raise HTTPException(status_code=404, detail="Repo not found")
+        if repo.get("user_id") != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        budget = store.get_patrol_budget(repo_id)
+        if budget <= 0:
+            raise HTTPException(status_code=429, detail="Patrol budget exhausted for this window")
+
+        activity_id = store.add_activity(repo_id, "patrol", f"budget:{budget}")
+        logger.info("Manual patrol trigger by %s for %s", current_user["id"][:8], repo_id)
+        return {"status": "triggered", "activity_id": activity_id}
+
+    @r.get("/repos/{repo_id}/patrol/status")
+    async def get_patrol_status(repo_id: str, current_user: CurrentUser) -> dict:
+        repo = store.get_repo(repo_id)
+        if repo is None:
+            raise HTTPException(status_code=404, detail="Repo not found")
+        if repo.get("user_id") != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        budget = store.get_patrol_budget(repo_id)
+
+        # Find last patrol activity
+        activities = store.list_activities(repo_id=repo_id)
+        last_patrol_at: str | None = None
+        for a in reversed(list(activities)):
+            if a["kind"] == "patrol" and a["status"] in ("done", "failed"):
+                last_patrol_at = a["updated_at"]
+                break
+
+        # Check embedding service
+        from ..embeddings import check_embedding_service, is_embedding_service_configured
+        if is_embedding_service_configured():
+            emb_ok, emb_err = await check_embedding_service()
+            embedding_status = "ok" if emb_ok else f"error: {emb_err}"
+        else:
+            embedding_status = "not_configured"
+
+        return {
+            "enabled": bool(repo.get("patrol_enabled")),
+            "patrol_interval_hours": repo.get("patrol_interval_hours", 12),
+            "patrol_max_issues": repo.get("patrol_max_issues", 5),
+            "patrol_window_hours": repo.get("patrol_window_hours", 12),
+            "budget_remaining": budget,
+            "last_patrol_at": last_patrol_at,
+            "last_patrol_sha": repo.get("last_patrol_sha"),
+            "embedding_service_status": embedding_status,
+        }
 
     return r

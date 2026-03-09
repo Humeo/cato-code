@@ -21,6 +21,26 @@ If budget is 0, output "Budget exhausted. Stopping patrol." and stop immediately
 
 After filing each issue, deduct 1 from your remaining budget.
 
+## 扫描范围（严格遵守）
+
+**只扫描以下文件：**
+
+{changed_files}
+
+如果列表显示"（全量扫描）"，则扫描整个代码库，优先从高风险区域开始。
+
+## 已知的相关 Open Issues（勿重复提交）
+
+{relevant_issues}
+
+提交新 issue 前，**必须确认**：
+1. 问题不在上述列表中
+2. 即使问题类型相似，也要确认是不同文件/不同代码位置的不同 bug
+
+如果发现疑似重复：
+- 在已有 issue 下评论，补充你的发现
+- 不再创建新 issue
+
 ## Audit Priorities (in order)
 
 1. **Security vulnerabilities**
@@ -74,16 +94,9 @@ After filing each issue, deduct 1 from your remaining budget.
 
 ## Workflow
 
-### Step 1: Explore the Codebase
+### Step 1: Explore the Scoped Files
 
-Start with high-risk areas:
-- Authentication and authorization code
-- Input validation and sanitization
-- Database queries (SQL injection risk)
-- File operations (path traversal risk)
-- External API calls (injection risk)
-- Cryptographic operations
-- Session management
+Only look at files listed in the "扫描范围" section above.
 
 Use tools:
 ```bash
@@ -125,7 +138,12 @@ curl http://localhost:3000/download?file=../../../etc/passwd
 
 Capture the output to `/tmp/patrol-evidence-{n}.txt`.
 
-### Step 3: File the Issue
+### Step 3: Check for Duplicates
+
+Before filing, **always** verify the issue is not in the "已知的相关 Open Issues" list above.
+If you find a near-duplicate, comment on the existing issue with your additional evidence.
+
+### Step 4: File the Issue
 
 Use `gh issue create` with this format:
 
@@ -133,7 +151,7 @@ Use `gh issue create` with this format:
 gh issue create \
   --title "security: SQL injection in user search" \
   --body "$(cat <<'EOF'
-## Bug Report (found by RepoCraft patrol)
+## Bug Report (found by CatoCode patrol)
 
 ### Severity
 🔴 Critical - SQL injection vulnerability
@@ -170,6 +188,8 @@ cursor.execute("SELECT * FROM users WHERE name = ?", (user_input,))
 ### References
 - OWASP SQL Injection: https://owasp.org/www-community/attacks/SQL_Injection
 - CWE-89: https://cwe.mitre.org/data/definitions/89.html
+
+<!-- catocode-patrol sha:{current_sha} -->
 EOF
 )"
 ```
@@ -179,7 +199,7 @@ EOF
 - `bug` for crashes and logic errors
 - `tech-debt` for code quality issues
 
-### Step 4: Update Budget
+### Step 5: Update Budget
 
 After filing, output:
 ```
@@ -196,12 +216,13 @@ Don't waste time on:
 - Theoretical performance optimizations without profiling
 - Refactoring suggestions without concrete bugs
 - Documentation improvements (not bugs)
+- Files NOT listed in the scan scope
 
 ## Stopping Conditions
 
 Stop when:
 1. Budget is exhausted
-2. You've scanned all high-priority areas
+2. You've scanned all files in the scan scope
 3. You've failed to reproduce 5 consecutive findings (you're being too speculative)
 
 ## Output Format
@@ -210,13 +231,13 @@ At the end, output a summary:
 ```
 🔍 Patrol scan complete
 📝 Issues filed: {count}
-🎯 Areas scanned: {list of modules/files}
+🎯 Files scanned: {list of files}
 ⏱️  Time spent: {approximate}
 ```
 
 ## Why This Matters
 
-Proactive patrol is what makes RepoCraft valuable - it finds bugs before users do. But it only works if the bugs are real. Filing false positives wastes everyone's time and erodes trust.
+Proactive patrol is what makes CatoCode valuable - it finds bugs before users do. But it only works if the bugs are real. Filing false positives wastes everyone's time and erodes trust.
 
 The evidence requirement ensures every issue you file is:
 - **Real** - you proved it exists
@@ -224,3 +245,4 @@ The evidence requirement ensures every issue you file is:
 - **Valuable** - it's worth fixing
 
 This is the difference between a useful security audit and noise.
+

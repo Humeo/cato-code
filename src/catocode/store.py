@@ -102,6 +102,32 @@ CREATE TABLE IF NOT EXISTS installations (
     account_type TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS issue_embeddings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id TEXT NOT NULL,
+    github_issue_number INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    normalized_summary TEXT,
+    embedding TEXT,
+    source TEXT DEFAULT 'human',
+    status TEXT DEFAULT 'open',
+    file_paths TEXT,
+    github_issue_url TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(repo_id, github_issue_number)
+);
+
+CREATE TABLE IF NOT EXISTS patrol_reviewed_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    review_source TEXT NOT NULL,
+    reviewed_at TEXT NOT NULL,
+    UNIQUE(repo_id, file_path)
+);
 """
 
 # Migrations: columns added after initial schema
@@ -117,6 +143,11 @@ _MIGRATIONS = [
     "ALTER TABLE activities ADD COLUMN cost_usd REAL",
     "ALTER TABLE repos ADD COLUMN user_id TEXT",
     "ALTER TABLE installations ADD COLUMN user_id TEXT",
+    "ALTER TABLE repos ADD COLUMN patrol_enabled INTEGER DEFAULT 0",
+    "ALTER TABLE repos ADD COLUMN patrol_max_issues INTEGER DEFAULT 5",
+    "ALTER TABLE repos ADD COLUMN patrol_window_hours INTEGER DEFAULT 12",
+    "ALTER TABLE repos ADD COLUMN last_patrol_sha TEXT",
+    "ALTER TABLE activities ADD COLUMN metadata TEXT",
 ]
 
 
@@ -184,14 +215,16 @@ class Store:
 
     # --- activities ---
 
-    def add_activity(self, repo_id: str, kind: str, trigger: str | None = None) -> str:
+    def add_activity(self, repo_id: str, kind: str, trigger: str | None = None, metadata: dict | None = None) -> str:
+        import json as _json
         activity_id = str(uuid.uuid4())
         now = _now()
+        metadata_str = _json.dumps(metadata) if metadata else None
         self._db.execute(
             """INSERT INTO activities
-               (id, repo_id, kind, trigger, status, created_at, updated_at)
-               VALUES (?, ?, ?, ?, 'pending', ?, ?)""",
-            (activity_id, repo_id, kind, trigger, now, now),
+               (id, repo_id, kind, trigger, status, metadata, created_at, updated_at)
+               VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)""",
+            (activity_id, repo_id, kind, trigger, metadata_str, now, now),
         )
         self._db.commit()
         return activity_id
@@ -605,3 +638,176 @@ class Store:
         self._db.execute("UPDATE oauth_states SET used = 1 WHERE state = ?", (state,))
         self._db.commit()
         return True
+
+    # --- patrol reviewed files ---
+
+    def upsert_reviewed_file(
+        self, repo_id: str, file_path: str, commit_sha: str, review_source: str
+    ) -> None:
+        """Record (or update) a file review entry."""
+        self._db.execute(
+            """INSERT INTO patrol_reviewed_files
+               (repo_id, file_path, commit_sha, review_source, reviewed_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(repo_id, file_path) DO UPDATE SET
+                 commit_sha = excluded.commit_sha,
+                 review_source = excluded.review_source,
+                 reviewed_at = excluded.reviewed_at""",
+            (repo_id, file_path, commit_sha, review_source, _now()),
+        )
+        self._db.commit()
+
+    def get_reviewed_files(self, repo_id: str) -> list[dict]:
+        """Return all reviewed file records for a repo."""
+        return self._db.execute(
+            "SELECT * FROM patrol_reviewed_files WHERE repo_id = ?", (repo_id,)
+        )
+
+    # --- issue embeddings ---
+
+    def upsert_issue_embedding(
+        self,
+        repo_id: str,
+        issue_number: int,
+        title: str,
+        summary: str | None,
+        embedding: list[float] | None,
+        source: str,
+        file_paths: str | None,
+        url: str | None,
+    ) -> None:
+        """Insert or update an issue embedding record."""
+        import json as _json
+        embedding_str = _json.dumps(embedding) if embedding is not None else None
+        now = _now()
+        self._db.execute(
+            """INSERT INTO issue_embeddings
+               (repo_id, github_issue_number, title, normalized_summary, embedding,
+                source, status, file_paths, github_issue_url, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)
+               ON CONFLICT(repo_id, github_issue_number) DO UPDATE SET
+                 title = excluded.title,
+                 normalized_summary = excluded.normalized_summary,
+                 embedding = excluded.embedding,
+                 source = excluded.source,
+                 file_paths = excluded.file_paths,
+                 github_issue_url = excluded.github_issue_url,
+                 updated_at = excluded.updated_at""",
+            (repo_id, issue_number, title, summary, embedding_str,
+             source, file_paths, url, now, now),
+        )
+        self._db.commit()
+
+    def update_issue_status(self, repo_id: str, issue_number: int, status: str) -> None:
+        """Update the status of a tracked issue (e.g., 'closed')."""
+        self._db.execute(
+            "UPDATE issue_embeddings SET status = ?, updated_at = ? "
+            "WHERE repo_id = ? AND github_issue_number = ?",
+            (status, _now(), repo_id, issue_number),
+        )
+        self._db.commit()
+
+    def get_open_issue_embeddings(self, repo_id: str) -> list[dict]:
+        """Return all open issue embedding records for a repo."""
+        import json as _json
+        rows = self._db.execute(
+            "SELECT * FROM issue_embeddings WHERE repo_id = ? AND status = 'open' ORDER BY updated_at DESC",
+            (repo_id,),
+        )
+        result = []
+        for row in rows:
+            r = dict(row)
+            if r.get("embedding"):
+                try:
+                    r["embedding"] = _json.loads(r["embedding"])
+                except Exception:
+                    r["embedding"] = None
+            result.append(r)
+        return result
+
+    def search_similar_issues(
+        self, repo_id: str, query_embedding: list[float], top_k: int = 5
+    ) -> list[dict]:
+        """Return top_k open issues with cosine similarity (SQLite fallback: recency order)."""
+        import json as _json
+        import math
+
+        rows = self._db.execute(
+            "SELECT * FROM issue_embeddings WHERE repo_id = ? AND status = 'open' "
+            "AND embedding IS NOT NULL ORDER BY updated_at DESC LIMIT 50",
+            (repo_id,),
+        )
+
+        def _cosine(a: list[float], b: list[float]) -> float:
+            dot = sum(x * y for x, y in zip(a, b))
+            na = math.sqrt(sum(x * x for x in a))
+            nb = math.sqrt(sum(x * x for x in b))
+            if na == 0 or nb == 0:
+                return 0.0
+            return dot / (na * nb)
+
+        scored = []
+        for row in rows:
+            r = dict(row)
+            try:
+                emb = _json.loads(r["embedding"]) if r.get("embedding") else None
+            except Exception:
+                emb = None
+            if emb:
+                sim = _cosine(query_embedding, emb)
+                r["similarity"] = sim
+                r["embedding"] = emb
+                scored.append(r)
+
+        scored.sort(key=lambda x: x["similarity"], reverse=True)
+        return scored[:top_k]
+
+    def get_catocode_open_issue_files(self, repo_id: str) -> set[str]:
+        """Return set of file paths mentioned in open CatoCode-filed issues."""
+        rows = self._db.execute(
+            "SELECT file_paths FROM issue_embeddings "
+            "WHERE repo_id = ? AND status = 'open' AND source = 'catocode' AND file_paths IS NOT NULL",
+            (repo_id,),
+        )
+        result: set[str] = set()
+        for row in rows:
+            for fp in (row["file_paths"] or "").split(","):
+                fp = fp.strip()
+                if fp:
+                    result.add(fp)
+        return result
+
+    # --- patrol settings ---
+
+    def update_patrol_settings(
+        self,
+        repo_id: str,
+        enabled: bool,
+        interval_hours: int,
+        max_issues: int,
+        window_hours: int,
+    ) -> None:
+        """Update patrol configuration for a repo."""
+        self._db.execute(
+            "UPDATE repos SET patrol_enabled = ?, patrol_interval_hours = ?, "
+            "patrol_max_issues = ?, patrol_window_hours = ? WHERE id = ?",
+            (1 if enabled else 0, interval_hours, max_issues, window_hours, repo_id),
+        )
+        self._db.commit()
+        # Also update patrol_budget table
+        self._db.execute(
+            """INSERT INTO patrol_budget (repo_id, window_start, issues_filed, max_issues, window_hours)
+               VALUES (?, ?, 0, ?, ?)
+               ON CONFLICT(repo_id) DO UPDATE SET
+                 max_issues = excluded.max_issues,
+                 window_hours = excluded.window_hours""",
+            (repo_id, _now(), max_issues, window_hours),
+        )
+        self._db.commit()
+
+    def update_last_patrol_sha(self, repo_id: str, sha: str) -> None:
+        """Record the HEAD SHA of the last patrol run."""
+        self._db.execute(
+            "UPDATE repos SET last_patrol_sha = ? WHERE id = ?", (sha, repo_id)
+        )
+        self._db.commit()

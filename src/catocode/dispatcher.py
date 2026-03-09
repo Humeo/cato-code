@@ -81,7 +81,7 @@ async def dispatch(
             container_mgr.reset_repo(repo_id)
 
         # 5. Build prompt based on activity kind
-        prompt = await _build_prompt(activity, repo, github_token)
+        prompt = await _build_prompt(activity, repo, github_token, store)
 
         # 6. Update status to running
         store.update_activity(activity_id, status="running")
@@ -227,7 +227,7 @@ async def _run_init(
         logger.warning("Init activity %s failed", activity_id)
 
 
-async def _build_prompt(activity: dict, repo: dict, github_token: str) -> str:
+async def _build_prompt(activity: dict, repo: dict, github_token: str, store: "Store | None" = None) -> str:
     """Build prompt based on activity kind using skill-based templates."""
     kind = activity["kind"]
     trigger = activity["trigger"] or ""
@@ -289,20 +289,68 @@ Labels: {', '.join(issue.labels) if issue.labels else 'None'}
 
 {issue.body}
 """
+        # RAG: find potential duplicates
+        from .issue_indexer import find_duplicates
+        from .embeddings import is_embedding_service_configured
+        relevant_issues: list[dict] = []
+        if store is not None and is_embedding_service_configured():
+            try:
+                query = f"{issue.title}\n{issue.body[:500]}"
+                relevant_issues = await find_duplicates(repo["id"], query, store)
+            except Exception:
+                pass
+
         return build_analyze_issue_prompt(
             issue_number=issue_number,
             repo_id=repo.get("id", f"{owner}-{repo_name}"),
             issue_data=issue_data,
+            relevant_issues=relevant_issues,
         )
 
     elif kind == "patrol":
-        # Trigger format: "budget:N" or None
+        # Trigger format: "budget:N" or "budget:N|sha:SHA"
+        import json as _json
         budget = 5  # default
-        if trigger.startswith("budget:"):
-            budget = int(trigger.split(":", 1)[1])
+        current_sha: str | None = None
+
+        for part in trigger.split("|"):
+            if part.startswith("budget:"):
+                try:
+                    budget = int(part.split(":", 1)[1])
+                except ValueError:
+                    pass
+            elif part.startswith("sha:"):
+                current_sha = part.split(":", 1)[1]
+
+        # Retrieve changed_files from activity metadata
+        changed_files: list[str] | None = None
+        raw_metadata = activity.get("metadata")
+        if raw_metadata:
+            try:
+                meta = _json.loads(raw_metadata)
+                changed_files = meta.get("changed_files")
+            except Exception:
+                pass
+
+        # RAG: query relevant issues if embedding service configured
+        from .issue_indexer import find_duplicates
+        from .embeddings import is_embedding_service_configured
+
+        relevant_issues: list[dict] = []
+        if store is not None and is_embedding_service_configured() and changed_files:
+            # Use changed file list as query for relevant issues
+            query = "issues related to: " + ", ".join(changed_files[:20])
+            try:
+                relevant_issues = await find_duplicates(repo["id"], query, store)
+            except Exception:
+                pass  # Graceful degradation
+
         return build_patrol_prompt(
             repo_id=repo.get("id", f"{owner}-{repo_name}"),
             budget_remaining=budget,
+            changed_files=changed_files,
+            relevant_issues=relevant_issues,
+            current_sha=current_sha,
         )
 
     elif kind == "task":

@@ -232,7 +232,13 @@ class Scheduler:
     async def _maybe_schedule_patrol(self, repo: dict) -> None:
         """Schedule a patrol activity if interval has passed and budget allows."""
         repo_id = repo["id"]
-        interval_hours = repo["patrol_interval_hours"] or 12
+
+        # Skip if patrol not enabled (default: disabled)
+        if not repo.get("patrol_enabled"):
+            logger.debug("Patrol disabled for %s, skipping", repo_id)
+            return
+
+        interval_hours = repo.get("patrol_interval_hours") or 12
 
         # Check if enough time has passed since last patrol
         activities = self._store.list_activities(repo_id)
@@ -253,8 +259,88 @@ class Scheduler:
             logger.debug("Patrol budget exhausted for %s, skipping", repo_id)
             return
 
-        activity_id = self._store.add_activity(repo_id, "patrol", f"budget:{budget}")
-        logger.info("Scheduled patrol activity %s for %s (budget=%d)", activity_id[:8], repo_id, budget)
+        # Resolve container manager for git commands
+        container_mgr = self._container_mgr
+        if self._registry is not None:
+            user_id = repo.get("user_id")
+            if user_id:
+                container_mgr = self._registry.get(user_id)
+            else:
+                container_mgr = ContainerManager()
+
+        # Try to compute changed files via git diff in container
+        last_sha = repo.get("last_patrol_sha")
+        current_sha: str | None = None
+        changed_files: list[str] | None = None
+
+        if container_mgr is not None:
+            repo_path = f"/repos/{repo_id}"
+            try:
+                result = container_mgr.exec(f"git -C {repo_path} rev-parse HEAD 2>/dev/null")
+                if result.exit_code == 0:
+                    current_sha = result.stdout.strip()
+
+                    if last_sha and last_sha != current_sha:
+                        diff_result = container_mgr.exec(
+                            f"git -C {repo_path} diff --name-only {last_sha}..{current_sha} 2>/dev/null"
+                        )
+                        if diff_result.exit_code == 0:
+                            changed_files = [
+                                f for f in diff_result.stdout.strip().splitlines() if f
+                            ]
+                        logger.debug(
+                            "Git diff %s..%s: %d files changed",
+                            last_sha[:8] if last_sha else "?",
+                            current_sha[:8] if current_sha else "?",
+                            len(changed_files) if changed_files else 0,
+                        )
+            except Exception as e:
+                logger.debug("Could not get git diff for %s (container not ready?): %s", repo_id, e)
+                # Fall through: changed_files remains None → full scan
+
+        # Filter: exclude files already reviewed at this exact SHA
+        if changed_files is not None and current_sha:
+            reviewed = self._store.get_reviewed_files(repo_id)
+            reviewed_unchanged = {
+                r["file_path"] for r in reviewed if r["commit_sha"] == current_sha
+            }
+            # Exclude files with existing CatoCode open issues
+            catocode_issue_files = self._store.get_catocode_open_issue_files(repo_id)
+
+            filtered = [
+                f for f in changed_files
+                if f not in reviewed_unchanged and f not in catocode_issue_files
+            ]
+
+            if not filtered:
+                logger.info(
+                    "No files to patrol for %s after filtering, updating SHA", repo_id
+                )
+                if current_sha:
+                    self._store.update_last_patrol_sha(repo_id, current_sha)
+                return
+
+            changed_files = filtered
+
+        # Build trigger: budget:N|sha:SHA
+        trigger_parts = [f"budget:{budget}"]
+        if current_sha:
+            trigger_parts.append(f"sha:{current_sha}")
+        trigger = "|".join(trigger_parts)
+
+        # Store changed_files in activity metadata
+        metadata = {"changed_files": changed_files} if changed_files is not None else {}
+
+        activity_id = self._store.add_activity(
+            repo_id, "patrol", trigger, metadata=metadata
+        )
+        logger.info(
+            "Scheduled patrol activity %s for %s (budget=%d, files=%s)",
+            activity_id[:8],
+            repo_id,
+            budget,
+            len(changed_files) if changed_files is not None else "all",
+        )
 
     async def _dispatch_loop(self) -> None:
         """Pick up pending activities and dispatch them."""

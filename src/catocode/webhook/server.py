@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -160,6 +161,11 @@ class WebhookServer:
                 activity_id,
                 requires_approval=1,
             )
+
+        # Auto-index issues and record PR reviews for patrol dedup
+        asyncio.ensure_future(
+            self._handle_patrol_side_effects(x_github_event, payload, repo_id)
+        )
 
         self._store.mark_webhook_event_processed(x_github_delivery)
 
@@ -324,8 +330,95 @@ class WebhookServer:
         if decision.requires_approval:
             self._store.update_activity(activity_id, requires_approval=1)
 
+        # Auto-index issues and record PR reviews for patrol dedup
+        asyncio.ensure_future(
+            self._handle_patrol_side_effects(x_github_event, payload, repo_id)
+        )
+
         self._store.mark_webhook_event_processed(x_github_delivery)
         return JSONResponse({"status": "created", "activity_id": activity_id, "activity_kind": decision.activity_kind})
+
+    async def _handle_patrol_side_effects(
+        self, event_type: str, payload: dict[str, Any], repo_id: str
+    ) -> None:
+        """Handle side effects for patrol: index issues and record PR file reviews."""
+        try:
+            repo = self._store.get_repo(repo_id)
+            if repo is None:
+                return
+
+            from ..config import parse_repo_url
+            try:
+                owner, repo_name = parse_repo_url(repo["repo_url"])
+            except ValueError:
+                return
+
+            github_token = await self._auth.get_token()
+            if not github_token:
+                return
+
+            if event_type == "issues":
+                issue = payload.get("issue", {})
+                action = payload.get("action", "")
+                issue_number = issue.get("number")
+                if issue_number is None:
+                    return
+
+                if action in ("opened", "edited"):
+                    from ..issue_indexer import index_single_issue
+                    await index_single_issue(
+                        repo_id, issue_number, owner, repo_name, github_token, self._store
+                    )
+                    logger.debug("Auto-indexed issue #%d for %s", issue_number, repo_id)
+                elif action == "closed":
+                    self._store.update_issue_status(repo_id, issue_number, "closed")
+                    logger.debug("Marked issue #%d closed for %s", issue_number, repo_id)
+
+            elif event_type == "pull_request":
+                pr = payload.get("pull_request", {})
+                action = payload.get("action", "")
+                if action == "closed" and pr.get("merged"):
+                    pr_number = pr.get("number")
+                    merge_sha = pr.get("merge_commit_sha", "")
+                    if pr_number and merge_sha:
+                        pr_files = await self._get_pr_files(
+                            owner, repo_name, pr_number, github_token
+                        )
+                        for file_path in pr_files:
+                            self._store.upsert_reviewed_file(
+                                repo_id, file_path, merge_sha, "pr_review"
+                            )
+                        logger.debug(
+                            "Recorded %d PR #%d files as reviewed for %s",
+                            len(pr_files), pr_number, repo_id,
+                        )
+        except Exception as e:
+            logger.warning("Patrol side effects error for %s: %s", repo_id, e)
+
+    async def _get_pr_files(
+        self, owner: str, repo: str, pr_number: int, github_token: str
+    ) -> list[str]:
+        """Fetch list of files changed in a PR."""
+        import httpx
+        headers = {
+            "Authorization": f"Bearer {github_token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        file_paths: list[str] = []
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/files",
+                params={"per_page": 100},
+                headers=headers,
+                timeout=10.0,
+            )
+            if resp.status_code == 200:
+                for f in resp.json():
+                    fp = f.get("filename")
+                    if fp:
+                        file_paths.append(fp)
+        return file_paths
 
     async def _handle_installation_event(self, payload: dict, delivery_id: str) -> dict:
         """Handle GitHub App installation created/deleted events."""
@@ -375,6 +468,20 @@ class WebhookServer:
         added = payload.get("repositories_added", [])
         removed = payload.get("repositories_removed", [])
 
+        # Ensure installation record exists (handles case where 'created' event was missed)
+        installation = payload.get("installation", {})
+        installation_id = str(installation.get("id", ""))
+        account = installation.get("account", {})
+        account_login = account.get("login", "")
+        account_type = account.get("type", "User")
+        if installation_id:
+            existing = self._store.get_installation(installation_id)
+            if not existing:
+                self._store.add_installation(installation_id, account_login, account_type)
+                logger.info("Auto-created missing installation record: %s (%s)", installation_id, account_login)
+
+        user_id = self._store.get_user_id_for_installation(installation_id) if installation_id else None
+
         watched, unwatched = [], []
 
         for repo_info in added:
@@ -382,10 +489,6 @@ class WebhookServer:
             repo_id = repo_id_from_url(repo_url)
             self._store.add_repo(repo_id, repo_url)
             self._store.update_repo(repo_id, watch=1)
-            # Propagate user_id from installation
-            installation = payload.get("installation", {})
-            installation_id = str(installation.get("id", ""))
-            user_id = self._store.get_user_id_for_installation(installation_id)
             if user_id:
                 self._store.update_repo(repo_id, user_id=user_id)
             watched.append(repo_id)

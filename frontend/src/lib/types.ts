@@ -13,7 +13,22 @@ export interface Repo {
   watch: number;
   user_id: string | null;
   patrol_interval_hours: number;
+  patrol_enabled: number;
+  patrol_max_issues: number;
+  patrol_window_hours: number;
+  last_patrol_sha: string | null;
   created_at: string;
+}
+
+export interface PatrolStatus {
+  enabled: boolean;
+  patrol_interval_hours: number;
+  patrol_max_issues: number;
+  patrol_window_hours: number;
+  budget_remaining: number;
+  last_patrol_at: string | null;
+  last_patrol_sha: string | null;
+  embedding_service_status: "ok" | "error" | "not_configured" | string;
 }
 
 export interface Activity {

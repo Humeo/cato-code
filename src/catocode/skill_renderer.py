@@ -154,6 +154,9 @@ Begin now.
 def build_patrol_prompt(
     repo_id: str,
     budget_remaining: int,
+    changed_files: list[str] | None = None,
+    relevant_issues: list[dict] | None = None,
+    current_sha: str | None = None,
     last_areas: list[str] | None = None,
     skill_name: str = "patrol",
 ) -> str:
@@ -162,6 +165,9 @@ def build_patrol_prompt(
     Args:
         repo_id: Repository identifier
         budget_remaining: Number of issues allowed to file in this window
+        changed_files: List of files changed since last patrol (None = full scan)
+        relevant_issues: Existing related open issues from RAG search
+        current_sha: Current HEAD commit SHA
         last_areas: Areas recently checked (to avoid duplication)
         skill_name: Name of the skill to use
 
@@ -170,9 +176,31 @@ def build_patrol_prompt(
     """
     skill_template = read_skill(skill_name)
 
+    # Format changed_files for template
+    if changed_files:
+        changed_files_text = "\n".join(f"- {f}" for f in changed_files)
+    else:
+        changed_files_text = "（全量扫描）"
+
+    # Format relevant issues for template
+    if relevant_issues:
+        issues_lines = []
+        for issue in relevant_issues:
+            url = issue.get("url", "")
+            num = issue.get("issue_number", "?")
+            title = issue.get("title", "")
+            verdict = issue.get("verdict", "")
+            issues_lines.append(f"- #{num}: {title} ({verdict}) {url}")
+        relevant_issues_text = "\n".join(issues_lines)
+    else:
+        relevant_issues_text = "（暂无相关 open issues）"
+
     context = {
         "repo_id": repo_id,
         "budget_remaining": str(budget_remaining),
+        "changed_files": changed_files_text,
+        "relevant_issues": relevant_issues_text,
+        "current_sha": current_sha or "",
     }
 
     skill_content = render_skill_prompt(skill_template, context)
@@ -203,10 +231,12 @@ If budget is 0, output "Budget exhausted. Stopping patrol." and stop immediately
 ### Instructions
 
 Follow the audit priorities and process in this skill. Remember:
-1. Only file issues where you have concrete reproduction evidence
-2. Do NOT file speculative issues
-3. Deduct 1 from budget after each issue filed
-4. Stop when budget reaches 0
+1. Only scan the files listed in the "Scan Scope" section above
+2. Check the "Known Related Open Issues" section before filing any new issue
+3. Only file issues where you have concrete reproduction evidence
+4. Do NOT file speculative issues
+5. Deduct 1 from budget after each issue filed
+6. Stop when budget reaches 0
 
 Begin now.
 """
@@ -332,6 +362,7 @@ def build_analyze_issue_prompt(
     issue_number: str,
     repo_id: str,
     issue_data: str,
+    relevant_issues: list[dict] | None = None,
     skill_name: str = "analyze_issue",
 ) -> str:
     """Build a prompt for analyzing a GitHub issue using the analyze_issue skill.
@@ -340,6 +371,7 @@ def build_analyze_issue_prompt(
         issue_number: GitHub issue number (e.g., "123")
         repo_id: Repository identifier (e.g., "owner-repo")
         issue_data: Full issue details
+        relevant_issues: List of potentially related open issues from RAG
         skill_name: Name of the skill to use
 
     Returns:
@@ -347,10 +379,24 @@ def build_analyze_issue_prompt(
     """
     skill_template = read_skill(skill_name)
 
+    # Format relevant issues for dedup check
+    if relevant_issues:
+        issues_lines = []
+        for issue in relevant_issues:
+            url = issue.get("url", "")
+            num = issue.get("issue_number", "?")
+            title = issue.get("title", "")
+            verdict = issue.get("verdict", "")
+            issues_lines.append(f"- #{num}: {title} ({verdict}) {url}")
+        relevant_issues_text = "\n".join(issues_lines)
+    else:
+        relevant_issues_text = "（无相关 open issues）"
+
     context = {
         "issue_number": issue_number,
         "repo_id": repo_id,
         "issue_data": issue_data,
+        "relevant_issues": relevant_issues_text,
     }
 
     skill_content = render_skill_prompt(skill_template, context)
@@ -370,10 +416,11 @@ You are analyzing issue #{issue_number} in repository {repo_id}.
 ### Instructions
 
 Follow the analysis workflow in this skill:
-1. Classify the issue type
-2. For bugs: analyze root cause and attempt reproduction
-3. Suggest 2-3 ranked solutions
-4. Post analysis comment with `/approve` instruction
+1. Check for duplicates first (Step 0 above)
+2. Classify the issue type
+3. For bugs: analyze root cause and attempt reproduction
+4. Suggest 2-3 ranked solutions
+5. Post analysis comment with `/approve` instruction
 
 Begin now.
 """
