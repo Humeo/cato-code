@@ -3,34 +3,54 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "${WEBHOOK_PORT:-8080}:8080"
+      - "${PORT:-8000}:8000"
     volumes:
-      # Mount Docker socket so CatoCode can manage the worker container
+      # Docker socket — CatoCode manages the worker container
       - /var/run/docker.sock:/var/run/docker.sock
-      # Persist database and repo data
+      # Persistent database and repo data
       - catocode-data:/data
     environment:
-      # ── Required ──────────────────────────────────────────
+      # ── AI ────────────────────────────────────────────────
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
 
-      # ── Auth: choose ONE of the two options below ─────────
+      # ── GitHub App ────────────────────────────────────────
+      - GITHUB_APP_ID=${GITHUB_APP_ID}
+      - GITHUB_APP_PRIVATE_KEY=${GITHUB_APP_PRIVATE_KEY}
+      - GITHUB_APP_WEBHOOK_SECRET=${GITHUB_APP_WEBHOOK_SECRET}
+      - GITHUB_APP_NAME=${GITHUB_APP_NAME:-catocode-bot}
 
-      # Option A: Personal Access Token (simpler)
+      # ── GitHub OAuth (SaaS user login) ────────────────────
+      - GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID}
+      - GITHUB_OAUTH_CLIENT_SECRET=${GITHUB_OAUTH_CLIENT_SECRET}
+
+      # ── Session / Encryption ──────────────────────────────
+      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY}
+
+      # ── URLs ──────────────────────────────────────────────
+      - CATOCODE_BASE_URL=${CATOCODE_BASE_URL:-http://localhost:8000}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+
+      # ── CLI / single-user fallback ────────────────────────
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
-
-      # Option B: GitHub App (recommended for production)
-      - GITHUB_APP_ID=${GITHUB_APP_ID:-}
-      - GITHUB_APP_PRIVATE_KEY=${GITHUB_APP_PRIVATE_KEY:-}
       - GITHUB_APP_INSTALLATION_ID=${GITHUB_APP_INSTALLATION_ID:-}
-      - GITHUB_APP_WEBHOOK_SECRET=${GITHUB_APP_WEBHOOK_SECRET:-}
 
-      # ── Optional tuning ───────────────────────────────────
+      # ── Embedding / RAG dedup (optional) ──────────────────
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-large}
+
+      # ── Database ──────────────────────────────────────────
+      - DATABASE_URL=${DATABASE_URL:-}
+
+      # ── Tuning ────────────────────────────────────────────
       - CATOCODE_PATROL_MAX_ISSUES=${CATOCODE_PATROL_MAX_ISSUES:-5}
       - CATOCODE_PATROL_WINDOW_HOURS=${CATOCODE_PATROL_WINDOW_HOURS:-12}
+      - CATOCODE_MEM=${CATOCODE_MEM:-8g}
+      - CATOCODE_CPUS=${CATOCODE_CPUS:-4}
       - GIT_USER_NAME=${GIT_USER_NAME:-CatoCode}
       - GIT_USER_EMAIL=${GIT_USER_EMAIL:-catocode@bot.local}
 
-    command: daemon --webhook-port 8080 --max-concurrent ${MAX_CONCURRENT:-3}
+    command: server --port 8000 --max-concurrent ${MAX_CONCURRENT:-3}
 
 volumes:
   catocode-data:
