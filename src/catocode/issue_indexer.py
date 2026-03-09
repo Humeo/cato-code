@@ -204,31 +204,23 @@ async def find_duplicates(
     """Two-stage dedup: vector recall + Haiku judgment.
 
     Returns list of {issue_number, url, similarity, verdict} for related/duplicate issues.
+    Falls back to keyword overlap scoring when embedding service is unavailable.
     """
     # Stage 1: Generate embedding for the new issue description
     query_embedding = await generate_embedding(issue_description)
 
     if query_embedding is None:
-        # Fallback: just return recent open issues without similarity scores
+        # Fallback: keyword overlap on stored normalized summaries (no external API)
         rows = store.get_open_issue_embeddings(repo_id)
-        return [
-            {
-                "issue_number": r["github_issue_number"],
-                "url": r.get("github_issue_url", ""),
-                "similarity": 0.0,
-                "verdict": "unknown",
-                "title": r["title"],
-            }
-            for r in rows[:5]
-        ]
-
-    # Stage 2: Vector similarity search (top-5)
-    candidates = store.search_similar_issues(repo_id, query_embedding, top_k=5)
+        candidates = _keyword_overlap_search(issue_description, rows, top_k=5)
+    else:
+        # Vector similarity search (top-5)
+        candidates = store.search_similar_issues(repo_id, query_embedding, top_k=5)
 
     if not candidates:
         return []
 
-    # Stage 3: Haiku judgment for each candidate
+    # Haiku judgment for each candidate
     results = []
     for candidate in candidates:
         verdict = await _haiku_judge_duplicate(
@@ -246,6 +238,56 @@ async def find_duplicates(
 
     # Return only duplicate or related
     return [r for r in results if r["verdict"] in ("duplicate", "related")]
+
+
+def _keyword_overlap_search(query: str, rows: list[dict], top_k: int = 5) -> list[dict]:
+    """Jaccard token overlap scoring as embedding fallback.
+
+    Uses the structured normalized_summary (bug_type | module | keywords | one_line)
+    stored by Haiku during indexing. Much better than returning arbitrary recent issues.
+    Excludes issues with zero overlap — Haiku won't waste tokens on unrelated content.
+    """
+    import re
+
+    def tokenize(text: str) -> set[str]:
+        # Extract lowercase words 3+ chars, skip stop words and common noise
+        _STOP = {"the", "and", "for", "that", "this", "with", "from", "are", "was",
+                 "not", "but", "when", "has", "have", "been", "can", "will"}
+        return {
+            w for w in re.findall(r"\b[a-z][a-z0-9_]{2,}\b", text.lower())
+            if w not in _STOP
+        }
+
+    query_tokens = tokenize(query)
+    if not query_tokens:
+        return []
+
+    scored = []
+    for row in rows:
+        # Combine all text fields; normalized_summary already has structured keywords
+        combined = " ".join(filter(None, [
+            row.get("title", ""),
+            row.get("normalized_summary", ""),
+            (row.get("file_paths") or "").replace(",", " "),
+        ]))
+        row_tokens = tokenize(combined)
+        if not row_tokens:
+            continue
+
+        intersection = query_tokens & row_tokens
+        if not intersection:
+            continue  # skip zero-overlap — nothing for Haiku to judge
+
+        # Overlap coefficient: |A∩B| / min(|A|, |B|)
+        # Better than Jaccard for short vs long text — rewards high recall
+        score = len(intersection) / min(len(query_tokens), len(row_tokens))
+
+        r = dict(row)
+        r["similarity"] = round(score, 3)
+        scored.append(r)
+
+    scored.sort(key=lambda x: x["similarity"], reverse=True)
+    return scored[:top_k]
 
 
 async def _haiku_judge_duplicate(
