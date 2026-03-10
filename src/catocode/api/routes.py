@@ -26,11 +26,6 @@ class PatrolSettings(BaseModel):
     patrol_window_hours: int = Field(default=12, gt=0, le=168)
 
 
-def _get_store_from_app(router_instance: APIRouter) -> Store:
-    """Placeholder — store is injected via request.app.state in the factory."""
-    raise NotImplementedError
-
-
 def _enrich_activity(activity: dict) -> dict:
     """Add computed pipeline_stage field to an activity dict."""
     a = dict(activity)
