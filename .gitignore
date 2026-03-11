@@ -50,3 +50,7 @@ frontend/tsconfig.tsbuildinfo
 
 # Playwright MCP
 .playwright-mcp/
+
+# Claude Code and agent skills (local dev tools)
+.claude/
+.agents/
