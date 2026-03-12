@@ -15,6 +15,7 @@ from ..config import get_github_app_webhook_secret, parse_repo_url, repo_id_from
 from ..dashboard import dashboard_html_route
 from ..dashboard import make_router as make_dashboard_router
 from ..decision import decide_engagement
+from ..github.commenter import post_issue_comment
 from ..store import Store
 from .parser import parse_webhook
 from .verifier import verify_signature
@@ -170,6 +171,11 @@ class WebhookServer:
                 activity_id,
                 requires_approval=1,
             )
+            # For task activities, immediately post a comment so the user knows approval is needed
+            if decision.activity_kind == "task":
+                asyncio.ensure_future(
+                    self._post_pending_approval_comment(event, repo)
+                )
 
         # Auto-index issues and record PR reviews for patrol dedup
         asyncio.ensure_future(
@@ -337,6 +343,11 @@ class WebhookServer:
         activity_id = self._store.add_activity(repo_id, decision.activity_kind, event.trigger)
         if decision.requires_approval:
             self._store.update_activity(activity_id, requires_approval=1)
+            # For task activities, immediately post a comment so the user knows approval is needed
+            if decision.activity_kind == "task":
+                asyncio.ensure_future(
+                    self._post_pending_approval_comment(event, repo)
+                )
 
         # Auto-index issues and record PR reviews for patrol dedup
         asyncio.ensure_future(
@@ -402,6 +413,24 @@ class WebhookServer:
                         )
         except Exception as e:
             logger.warning("Patrol side effects error for %s: %s", repo_id, e)
+
+    async def _post_pending_approval_comment(self, event: Any, repo: dict) -> None:
+        """Post a comment indicating the task request is awaiting admin approval."""
+        try:
+            owner, repo_name = parse_repo_url(repo["repo_url"])
+            trigger_parts = event.trigger.split(":")
+            if len(trigger_parts) < 2:
+                return
+            issue_num = int(trigger_parts[1])
+            github_token = await self._auth.get_token()
+            body = (
+                "I've received your request and queued it for review.\n\n"
+                "A maintainer with write access needs to type `/approve` to proceed.\n\n"
+                "> This step ensures no unintended code changes are made automatically."
+            )
+            await post_issue_comment(owner, repo_name, issue_num, body, github_token)
+        except Exception as e:
+            logger.warning("Failed to post pending approval comment: %s", e)
 
     async def _get_pr_files(
         self, owner: str, repo: str, pr_number: int, github_token: str

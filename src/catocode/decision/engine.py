@@ -123,8 +123,8 @@ async def decide_engagement(
             return EngagementDecision(
                 should_engage=True,
                 activity_kind="task",
-                requires_approval=False,
-                reason="Direct mention - will execute request",
+                requires_approval=True,
+                reason="Direct mention - will execute request after admin approval",
             )
 
         return EngagementDecision(

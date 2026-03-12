@@ -37,6 +37,11 @@ def parse_webhook(
     """
     action = payload.get("action")
     sender = payload.get("sender", {}).get("login", "unknown")
+    sender_type = payload.get("sender", {}).get("type", "")
+
+    # Ignore events from bot accounts (including our own bot) to prevent loops
+    if sender_type == "Bot" or sender.endswith("[bot]"):
+        return None
 
     # Issues events
     if event_name == "issues":
