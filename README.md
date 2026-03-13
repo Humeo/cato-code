@@ -31,94 +31,17 @@ Every action includes **Proof of Work**: before/after evidence so you can verify
 
 ---
 
-## 🚀 Quick Start (CLI Mode — Open Source)
-
-The simplest way to run CatoCode: point it at a GitHub repo, start the daemon, and it will handle issues automatically.
-
-### 1. Prerequisites
-
-- Python 3.12+
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine)
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) — Python package manager
-- Anthropic API key — [get one here](https://console.anthropic.com/)
-- GitHub Personal Access Token with `repo` + `issues` + `pull_requests` scopes
-
-### 2. Install
+## 🚀 Quick Start
 
 ```bash
 git clone https://github.com/humeo/cato-code.git
 cd cato-code
-uv sync
+cp .env.example .env          # 编辑 .env，填入 ANTHROPIC_API_KEY 和 GITHUB_TOKEN
+docker compose up -d          # 启动服务
+docker compose exec catocode catocode watch https://github.com/owner/repo
 ```
 
-### 3. Configure
-
-Create a `.env` file in the project root:
-
-```bash
-# Required
-ANTHROPIC_API_KEY=sk-ant-...
-GITHUB_TOKEN=ghp_...          # Personal Access Token
-
-# Optional
-GIT_USER_NAME=CatoCode
-GIT_USER_EMAIL=catocode@bot.local
-CATOCODE_PATROL_MAX_ISSUES=5
-CATOCODE_PATROL_WINDOW_HOURS=12
-```
-
-### 4. Watch a Repository
-
-```bash
-uv run catocode watch https://github.com/owner/repo
-```
-
-This registers the repo in the local database (`~/.catocode/catocode.db`).
-
-### 5. Start the Daemon
-
-```bash
-uv run catocode daemon --webhook-port 8080
-```
-
-The daemon runs three background loops:
-- **Dispatch** (every 5s) — picks up pending activities and runs them in Docker
-- **Approval check** (every 30s) — detects `/approve` comments and triggers fixes
-- **Patrol** (configurable) — proactively scans repos for bugs
-
-### 6. Expose Webhooks (Optional — for Real-Time Events)
-
-Without webhooks, CatoCode still works — the **patrol** loop and `catocode fix` command operate independently. Webhooks enable **instant** reaction to new issues and PRs.
-
-To expose the daemon, use [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/create-local-tunnel/) (free):
-
-```bash
-# Install cloudflared
-brew install cloudflare/cloudflare/cloudflared   # macOS
-
-# Create a temporary public tunnel
-cloudflared tunnel --url http://localhost:8080
-# Output: https://your-tunnel-id.trycloudflare.com
-```
-
-Then add a webhook in your GitHub repo:
-- **URL**: `https://your-tunnel-id.trycloudflare.com/webhook/github/{owner-repo}`
-  - Replace `{owner-repo}` with e.g. `alice-myproject` (owner and repo joined by `-`)
-- **Content type**: `application/json`
-- **Events**: Issues, Issue comments, Pull requests, Pull request reviews
-
-### 7. (Optional) Run the Dashboard
-
-A read-only Next.js dashboard lets you view watched repos, activity history, and logs.
-
-```bash
-cd frontend
-bun install
-bun dev
-# Open http://localhost:3000
-```
-
-> **Note**: In CLI mode, the dashboard is read-only — no GitHub login required. Authentication is only needed in GitHub App / SaaS mode.
+详细步骤见下方 [Docker Compose 部署](#-docker-compose-recommended)。
 
 ---
 
@@ -127,7 +50,7 @@ bun dev
 1. **New issue opened** on GitHub → webhook fires to CatoCode
 2. **Daemon receives** the event → `analyze_issue` activity created
 3. **Docker worker container** spins up (built automatically on first run)
-4. **Claude Agent** (via [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)) analyzes the issue, posts a comment with analysis + proposed solutions
+4. **Claude Agent** analyzes the issue, posts a comment with analysis + proposed solutions
 5. **You reply** `/approve` on the GitHub issue
 6. **CatoCode** creates a PR with the fix + Proof of Work evidence
 
@@ -137,23 +60,26 @@ bun dev
 
 ```bash
 # Watch a repo (registers in local DB)
-uv run catocode watch https://github.com/owner/repo
+catocode watch https://github.com/owner/repo
 
 # Stop watching a repo
-uv run catocode unwatch https://github.com/owner/repo
+catocode unwatch https://github.com/owner/repo
 
 # Start the daemon (webhook server + scheduler)
-uv run catocode daemon --webhook-port 8080
+catocode daemon --webhook-port 8080
 
 # Fix a specific issue immediately (no webhook needed)
-uv run catocode fix https://github.com/owner/repo/issues/42
+catocode fix https://github.com/owner/repo/issues/42
 
 # Show watched repos and recent activity
-uv run catocode status
+catocode status
 
 # Tail recent logs
-uv run catocode logs
+catocode logs
 ```
+
+> **Tip**: 使用 Docker Compose 时，在命令前加 `docker compose exec catocode`，例如 `docker compose exec catocode catocode watch ...`。
+> 本地开发时使用 `uv run catocode watch ...`。
 
 ---
 
@@ -194,42 +120,37 @@ Skills live in `src/catocode/container/skills/` and can be customized without co
 
 ---
 
-## ⚙️ Full Configuration Reference
+## ⚙️ Configuration
+
+All configuration through environment variables. Copy `.env.example` to `.env` and edit:
 
 ```bash
-# Anthropic
-ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_BASE_URL=...              # Optional: custom API endpoint
-
-# GitHub Auth — choose one:
-GITHUB_TOKEN=ghp_...               # CLI mode: Personal Access Token
-
-# Git identity (used for commits inside the container)
-GIT_USER_NAME=CatoCode
-GIT_USER_EMAIL=catocode@bot.local
-
-# Webhook server
-WEBHOOK_PORT=8080
-
-# Patrol limits
-CATOCODE_PATROL_MAX_ISSUES=5       # Max issues to patrol per window
-CATOCODE_PATROL_WINDOW_HOURS=12    # Rolling window for patrol
-
-# Container resources
-CATOCODE_MEM=8g                    # Memory limit for worker container
-CATOCODE_CPUS=4                    # CPU limit
-
-# Database (default: SQLite)
-DATABASE_URL=postgresql://...       # Optional: use PostgreSQL instead
+cp .env.example .env
 ```
+
+| 变量 | 必填 | 说明 |
+|------|------|------|
+| `ANTHROPIC_API_KEY` | ✅ | Anthropic API 密钥 |
+| `GITHUB_TOKEN` | ✅ | GitHub PAT（需要 `repo` 权限） |
+| `ANTHROPIC_BASE_URL` | | 自定义 API 端点（代理） |
+| `GIT_USER_NAME` | | 容器内 Git 提交用户名（默认 `CatoCode`） |
+| `GIT_USER_EMAIL` | | 容器内 Git 提交邮箱（默认 `catocode@bot.local`） |
+| `CATOCODE_MEM` | | Worker 容器内存限制（默认 `8g`） |
+| `CATOCODE_CPUS` | | Worker 容器 CPU 限制（默认 `4`） |
+| `CATOCODE_PATROL_MAX_ISSUES` | | 每个巡检窗口最大 issue 数（默认 `5`） |
+| `CATOCODE_PATROL_WINDOW_HOURS` | | 巡检滚动窗口（默认 `12` 小时） |
+| `MAX_CONCURRENT` | | 最大并发任务数（默认 `3`） |
+| `DATABASE_URL` | | PostgreSQL 连接串（默认用 SQLite） |
+
+完整变量列表和说明见 [`.env.example`](.env.example)。
 
 ---
 
-## 🐳 Docker Compose (One-Click Deploy)
+## 🐳 Docker Compose (Recommended)
 
-If you don't want to install Python/uv locally, run everything in Docker:
+Docker Compose 是最简单的部署方式，不需要本地安装 Python/uv。
 
-### 1. Configure
+### 1. Clone & Configure
 
 ```bash
 git clone https://github.com/humeo/cato-code.git
@@ -237,12 +158,14 @@ cd cato-code
 cp .env.example .env
 ```
 
-Edit `.env` — for CLI mode, you only need these two lines:
+编辑 `.env`，填入你的配置值。CLI 模式下必填项：
 
-```bash
-ANTHROPIC_API_KEY=sk-ant-...
-GITHUB_TOKEN=ghp_...
-```
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `ANTHROPIC_API_KEY` | Anthropic API 密钥 | `sk-ant-...` |
+| `GITHUB_TOKEN` | GitHub Personal Access Token (需要 `repo` 权限) | `ghp_...` |
+
+其他变量都有默认值，可按需调整（容器资源、巡检频率、Git 身份等），详见 `.env.example` 中的注释。
 
 ### 2. Start
 
@@ -250,37 +173,58 @@ GITHUB_TOKEN=ghp_...
 docker compose up -d
 ```
 
-CatoCode server starts on port `8000` (configurable via `PORT` in `.env`).
+CatoCode 服务启动在端口 `8000`（可通过 `.env` 中的 `PORT` 修改）。
+
+首次启动会自动构建 Docker 镜像（约 5-10 分钟），后续启动复用缓存。
 
 ### 3. Watch a Repo
 
 ```bash
-# Exec into the running container
 docker compose exec catocode catocode watch https://github.com/owner/repo
 ```
 
-### 4. Expose Webhook (for real-time GitHub events)
+### 4. Check Status
 
 ```bash
-# On your host machine
+# 查看监听的仓库和最近活动
+docker compose exec catocode catocode status
+
+# 查看日志
+docker compose logs -f catocode
+```
+
+### 5. (Optional) Expose Webhook
+
+没有 webhook，CatoCode 仍然可以工作（patrol 巡检 + `fix` 命令）。配置 webhook 后可以**实时**响应新 issue 和 PR。
+
+```bash
+# 安装 cloudflared (macOS)
+brew install cloudflare/cloudflare/cloudflared
+
+# 创建临时公网隧道
 cloudflared tunnel --url http://localhost:8000
 ```
 
-Add the tunnel URL as a GitHub webhook:
+在 GitHub 仓库 Settings → Webhooks 中添加：
 - **URL**: `https://<tunnel-id>.trycloudflare.com/webhook/github/{owner-repo}`
 - **Content type**: `application/json`
 - **Events**: Issues, Issue comments, Pull requests, Pull request reviews
 
-### 5. (Optional) Frontend Dashboard
+> `{owner-repo}` 格式为 `owner-repo`，例如 `alice-myproject`
+
+### 6. (Optional) Frontend Dashboard
+
+前端 Dashboard 提供可视化的仓库状态和活动历史，CLI 模式下无需登录。
 
 ```bash
 cd frontend
+cp .env.example .env.local   # 默认值即可，无需修改
 bun install
 bun dev
-# Open http://localhost:3000
+# 打开 http://localhost:3000
 ```
 
-> The Docker Compose setup mounts the Docker socket so CatoCode can manage its worker container. Data is persisted in a Docker volume (`catocode-data`).
+> **Note**: Docker Compose 挂载了 Docker socket，使 CatoCode 能管理 worker 容器。数据通过 Docker volume（`catocode-data`）持久化。
 
 ---
 
@@ -351,6 +295,6 @@ Apache License 2.0 — see [LICENSE](LICENSE) for details.
 **"Integrity is doing the right thing, even when no one is watching."**
 — Cato the Elder
 
-[Get Started](#-quick-start-cli-mode--open-source) • [CLI Reference](#-cli-reference) • [Contributing](#-contributing)
+[Quick Start](#-quick-start) • [Docker Deploy](#-docker-compose-recommended) • [CLI Reference](#-cli-reference) • [Contributing](#-contributing)
 
 </div>
