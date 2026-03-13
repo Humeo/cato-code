@@ -132,17 +132,15 @@ cp .env.example .env
 |------|------|------|
 | `ANTHROPIC_API_KEY` | ✅ | Anthropic API 密钥 |
 | `GITHUB_TOKEN` | ✅ | GitHub PAT（需要 `repo` 权限） |
-| `ANTHROPIC_BASE_URL` | | 自定义 API 端点（代理） |
 | `GIT_USER_NAME` | | 容器内 Git 提交用户名（默认 `CatoCode`） |
 | `GIT_USER_EMAIL` | | 容器内 Git 提交邮箱（默认 `catocode@bot.local`） |
+| `MAX_CONCURRENT` | | 最大并发任务数（默认 `3`） |
 | `CATOCODE_MEM` | | Worker 容器内存限制（默认 `8g`） |
 | `CATOCODE_CPUS` | | Worker 容器 CPU 限制（默认 `4`） |
 | `CATOCODE_PATROL_MAX_ISSUES` | | 每个巡检窗口最大 issue 数（默认 `5`） |
 | `CATOCODE_PATROL_WINDOW_HOURS` | | 巡检滚动窗口（默认 `12` 小时） |
-| `MAX_CONCURRENT` | | 最大并发任务数（默认 `3`） |
-| `DATABASE_URL` | | PostgreSQL 连接串（默认用 SQLite） |
 
-完整变量列表和说明见 [`.env.example`](.env.example)。
+完整变量列表见 [`.env.example`](.env.example)。
 
 ---
 
