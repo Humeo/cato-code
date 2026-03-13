@@ -86,9 +86,11 @@ The daemon runs three background loops:
 - **Approval check** (every 30s) — detects `/approve` comments and triggers fixes
 - **Patrol** (configurable) — proactively scans repos for bugs
 
-### 6. Expose Webhooks (Required for Real-Time Events)
+### 6. Expose Webhooks (Optional — for Real-Time Events)
 
-For CatoCode to react to new issues and PRs in real time, GitHub needs to reach the daemon's webhook endpoint. Use [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/create-local-tunnel/) for a free public URL:
+Without webhooks, CatoCode still works — the **patrol** loop and `catocode fix` command operate independently. Webhooks enable **instant** reaction to new issues and PRs.
+
+To expose the daemon, use [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/create-local-tunnel/) (free):
 
 ```bash
 # Install cloudflared
@@ -223,17 +225,62 @@ DATABASE_URL=postgresql://...       # Optional: use PostgreSQL instead
 
 ---
 
-## 🐳 Docker Compose (Alternative)
+## 🐳 Docker Compose (One-Click Deploy)
 
-For a fully containerized setup:
+If you don't want to install Python/uv locally, run everything in Docker:
+
+### 1. Configure
 
 ```bash
+git clone https://github.com/humeo/cato-code.git
+cd cato-code
 cp .env.example .env
-# Edit .env with your credentials
+```
+
+Edit `.env` — for CLI mode, you only need these two lines:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+GITHUB_TOKEN=ghp_...
+```
+
+### 2. Start
+
+```bash
 docker compose up -d
 ```
 
-Dashboard at `http://localhost:3000`, webhook server at `http://localhost:8080`.
+CatoCode server starts on port `8000` (configurable via `PORT` in `.env`).
+
+### 3. Watch a Repo
+
+```bash
+# Exec into the running container
+docker compose exec catocode catocode watch https://github.com/owner/repo
+```
+
+### 4. Expose Webhook (for real-time GitHub events)
+
+```bash
+# On your host machine
+cloudflared tunnel --url http://localhost:8000
+```
+
+Add the tunnel URL as a GitHub webhook:
+- **URL**: `https://<tunnel-id>.trycloudflare.com/webhook/github/{owner-repo}`
+- **Content type**: `application/json`
+- **Events**: Issues, Issue comments, Pull requests, Pull request reviews
+
+### 5. (Optional) Frontend Dashboard
+
+```bash
+cd frontend
+bun install
+bun dev
+# Open http://localhost:3000
+```
+
+> The Docker Compose setup mounts the Docker socket so CatoCode can manage its worker container. Data is persisted in a Docker volume (`catocode-data`).
 
 ---
 
