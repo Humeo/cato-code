@@ -23,28 +23,24 @@
 ---
 
 > [!IMPORTANT]
-> **What CatoCode does:**
-> - Runs Docker containers locally (isolated execution environment)
-> - Calls the Anthropic API (code snippets are sent to Anthropic for analysis)
-> - Posts comments and opens PRs on GitHub on your behalf
->
-> **What it does NOT do:**
-> - Does not send code to any third party other than Anthropic
-> - Does not commit or merge code without your explicit `/approve`
+> **Transparency notice:**
+> - All code analysis runs inside isolated Docker containers on your infrastructure — no code leaves your machine except to the Anthropic API
+> - CatoCode posts comments and opens PRs on your behalf, but **never merges without your explicit `/approve`**
+> - Every action produces a verifiable evidence chain (before/after test results) — you can audit exactly what happened and why
 >
 > **To stop immediately:** `docker compose down`
 
 ---
 
-## The Problem
+## Why CatoCode
 
-Your GitHub repo generates new issues, PRs, and potential bugs every day.
+Maintaining a codebase is an ongoing commitment. Issues pile up, PRs wait for review, security vulnerabilities go unnoticed, and the backlog only grows when the team is focused on feature work.
 
-Each bug follows the same loop: read the issue → pull locally → reproduce → locate the cause → write the fix → run tests → open a PR. Repetitive, time-consuming — and nothing happens while you're away.
+Today's AI coding tools address part of the problem — but they all share the same limitation: **they stop working when you close the laptop.** Copilot and Cursor are powerful, but reactive — they wait inside your editor for you to ask. Fully autonomous agents like Devin can work independently, but produce opaque results that are hard to trust or verify.
 
-AI code completion tools (Copilot, Cursor) help you write code, but they're reactive — they wait to be asked. Fully autonomous tools like Devin go the other extreme — you can't tell what changed or whether to trust the result.
+CatoCode takes a different approach: **a long-running agent that stays beside your repository 24/7.** It watches for new issues and PRs, responds within seconds, and handles the repetitive maintenance loop autonomously — reproduce, analyze, fix, test, open PR. But unlike a black-box agent, every action is backed by a two-layer evidence chain: proof the bug exists before the fix, and proof the fix works after. You review a PR with a before/after evidence table and decide in 30 seconds whether to merge.
 
-**CatoCode sits in the middle: always running, actively responding, but leaving evidence at every step. You decide what to merge.**
+**Always running. Always proving. You stay in control.**
 
 ---
 
