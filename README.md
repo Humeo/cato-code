@@ -1,13 +1,18 @@
 <div align="center">
 
-<img src="readme-banner.png" width="1200" alt="CatoCode — 长时运行的代码库维护助手" />
+<picture>
+  <img src="readme-banner.png" width="100%" alt="CatoCode — 长时运行的代码库维护助手" />
+</picture>
 
-
+<br />
+<br />
 
 [![CI](https://github.com/humeo/cato-code/actions/workflows/ci.yml/badge.svg)](https://github.com/humeo/cato-code/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-required-blue)](https://www.docker.com/)
+
+<br />
 
 [托管服务](#-托管服务) · [快速开始](#-快速开始) · [设计哲学](#-设计哲学) · [工作原理](#-工作原理) · [CLI 参考](#-cli-参考) · [贡献](#-贡献)
 
