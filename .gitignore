@@ -64,3 +64,8 @@ frontend/tsconfig.tsbuildinfo
 
 # Misplaced home directory
 ~/
+
+# Local-only tooling and design artifacts
+openspec/
+scripts/
+readme-header.html
