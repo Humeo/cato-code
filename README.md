@@ -254,6 +254,9 @@ Edit `.env`:
 | `MAX_CONCURRENT`    |          | Max concurrent tasks (default: `3`)                 |
 | `CATOCODE_MEM`      |          | Worker container memory limit (default: `8g`)       |
 | `CATOCODE_CPUS`     |          | Worker container CPU limit (default: `4`)           |
+| `EMBEDDING_API_KEY` |          | OpenAI-compatible API key (enables issue dedup)     |
+| `EMBEDDING_BASE_URL`|          | Embedding API base URL                              |
+| `EMBEDDING_MODEL`   |          | Embedding model name (e.g. `text-embedding-3-large`)|
 
 Full variable list: [`.env.example`](.env.example)
 
