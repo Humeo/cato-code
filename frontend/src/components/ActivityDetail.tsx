@@ -159,11 +159,11 @@ export function ActivityDetail({ activityId }: ActivityDetailProps) {
           </div>
           <div>
             <span className="text-gray-600 block">Created</span>
-            <span className="text-gray-400">{activity.created_at.substring(0, 19).replace("T", " ")}</span>
+            <span className="text-gray-400">{new Date(activity.created_at).toLocaleString()}</span>
           </div>
           <div>
             <span className="text-gray-600 block">Updated</span>
-            <span className="text-gray-400">{activity.updated_at.substring(0, 19).replace("T", " ")}</span>
+            <span className="text-gray-400">{new Date(activity.updated_at).toLocaleString()}</span>
           </div>
           {activity.summary && (
             <div className="col-span-2">

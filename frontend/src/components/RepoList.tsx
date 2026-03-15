@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { deleteRepo, updatePatrolSettings, triggerPatrol } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import type { Repo } from "@/lib/types";
@@ -127,6 +127,10 @@ function PatrolPanel({ repo }: { repo: Repo }) {
 export function RepoList({ repos: initialRepos }: RepoListProps) {
   const [repos, setRepos] = useState(initialRepos);
   const [pendingDelete, setPendingDelete] = useState<Repo | null>(null);
+
+  useEffect(() => {
+    setRepos(initialRepos);
+  }, [initialRepos]);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedPatrol, setExpandedPatrol] = useState<string | null>(null);

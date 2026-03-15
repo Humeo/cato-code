@@ -1,10 +1,18 @@
 import type { Stats, Repo, Activity, ActivityLog, PatrolStatus } from "./types";
 
+// Server-side: use INTERNAL_API_URL (Docker service name) if set
+// Client-side: NEXT_PUBLIC_API_URL (browser-accessible host)
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const INTERNAL_API_URL = process.env.INTERNAL_API_URL ?? API_URL;
+
+function getBaseUrl() {
+  // typeof window === "undefined" means we're running server-side
+  return typeof window === "undefined" ? INTERNAL_API_URL : API_URL;
+}
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T | null> {
   try {
-    const res = await fetch(`${API_URL}${path}`, {
+    const res = await fetch(`${getBaseUrl()}${path}`, {
       cache: "no-store",
       ...init,
     });

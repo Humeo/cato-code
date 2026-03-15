@@ -489,9 +489,8 @@ async def _execute_sdk_runner(
                 log_batch.append(line)
                 line_count += 1
 
-                # Flush every 50 lines
-                if len(log_batch) >= 50:
-                    await _flush_batch()
+                # Flush every line for real-time log streaming in the dashboard
+                await _flush_batch()
 
                 # Extract session_id and cost from result line
                 if line.strip().startswith("{"):

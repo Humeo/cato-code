@@ -14,17 +14,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && mv /root/.local/bin/uv /usr/local/bin/uv
 
 WORKDIR /app
 
-# Install Python deps (layer-cached)
+# Install Python deps only (layer-cached, re-runs only when pyproject.toml/uv.lock changes)
 COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Copy source and install the project itself
+COPY src/ src/
 RUN uv sync --frozen --no-dev \
     && ln -s /app/.venv/bin/catocode /usr/local/bin/catocode
-
-# Copy source
-COPY src/ src/
 
 # Data directory
 RUN mkdir -p /data
@@ -32,5 +34,5 @@ ENV CATOCODE_DB_PATH=/data/catocode.db
 
 EXPOSE 8000
 
-ENTRYPOINT ["uv", "run", "catocode"]
+ENTRYPOINT ["/usr/local/bin/catocode"]
 CMD ["server", "--port", "8000"]

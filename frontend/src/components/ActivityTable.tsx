@@ -78,7 +78,7 @@ export function ActivityTable({ activities, hideRepo = false }: ActivityTablePro
                   {a.cost_usd != null ? `$${a.cost_usd.toFixed(4)}` : "—"}
                 </td>
                 <td className="py-2.5 text-gray-500">
-                  {a.updated_at ? a.updated_at.substring(0, 19).replace("T", " ") : ""}
+                  {a.updated_at ? new Date(a.updated_at).toLocaleString() : ""}
                 </td>
               </tr>
             );

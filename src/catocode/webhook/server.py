@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from ..auth import Auth, get_auth
@@ -29,6 +30,21 @@ class WebhookServer:
         self._store = store
         self._auth = auth or get_auth()
         self.app = FastAPI(title="CatoCode Webhook Server")
+
+        # CORS — allow frontend on localhost in dev, or FRONTEND_URL in prod
+        import os
+        frontend_url = os.environ.get("FRONTEND_URL", "")
+        is_production = os.environ.get("CATOCODE_BASE_URL", "").startswith("https")
+        allowed_origins = [frontend_url] if frontend_url else []
+        if not is_production:
+            allowed_origins += ["http://localhost:3000", "http://localhost:3001"]
+        self.app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
         # Security check: warn if app webhook secret is not configured
         if not get_github_app_webhook_secret():
