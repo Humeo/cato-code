@@ -30,6 +30,76 @@ MAX_RETRIES = 3           # SDK runner retries on transient failure
 RETRY_DELAY_SECS = 30     # Delay between retries
 
 
+def _index_repo_from_container(
+    repo_id: str,
+    container_mgr: "ContainerManager",
+    store: "Store",
+    current_commit: str | None = None,
+) -> None:
+    """Index code definitions by reading files from the container."""
+    from .code_indexer import parse_file, detect_language
+    import json as _json
+
+    # Check if re-index needed
+    state = store.get_code_index_state(repo_id)
+    if state and current_commit and state.get("last_indexed_commit") == current_commit:
+        return
+
+    # Clear stale definitions before re-indexing
+    store.clear_code_definitions(repo_id)
+
+    # Get file list from container
+    repo_path = f"/repos/{repo_id}"
+    result = container_mgr.exec(
+        f"find {repo_path} -type f \\( -name '*.py' -o -name '*.js' -o -name '*.ts' "
+        f"-o -name '*.go' -o -name '*.rs' \\) "
+        f"-not -path '*node_modules*' -not -path '*__pycache__*' "
+        f"-not -path '*.git*' -not -path '*venv*' -not -path '*dist*' "
+        f"-size -500k "
+        f"| head -500",
+    )
+    if result.exit_code != 0:
+        return
+
+    files_parsed = 0
+    defs_found = 0
+
+    for file_path in result.stdout.strip().splitlines():
+        if not file_path:
+            continue
+        rel_path = file_path.replace(f"/repos/{repo_id}/", "", 1)
+        language = detect_language(rel_path)
+        if not language:
+            continue
+
+        # Read file content from container
+        cat_result = container_mgr.exec(f"cat '{file_path}'")
+        if cat_result.exit_code != 0 or not cat_result.stdout:
+            continue
+
+        defs = parse_file(rel_path, cat_result.stdout, language)
+        for d in defs:
+            store.upsert_code_definition(
+                repo_id=repo_id,
+                file_path=d.file_path,
+                symbol_type=d.symbol_type,
+                symbol_name=d.symbol_name,
+                signature=d.signature,
+                body_preview=d.body_preview,
+                line_start=d.line_start,
+                line_end=d.line_end,
+                language=d.language,
+                children=_json.dumps(d.children) if d.children else None,
+            )
+            defs_found += 1
+        files_parsed += 1
+
+    store.update_code_index_state(
+        repo_id, commit_sha=current_commit or "", file_count=files_parsed, symbol_count=defs_found
+    )
+    logger.info("Indexed %s: %d files, %d definitions", repo_id, files_parsed, defs_found)
+
+
 async def dispatch(
     activity_id: str,
     store: Store,
@@ -79,6 +149,14 @@ async def dispatch(
         # 4. Reset repo to clean state (skip for respond_review — needs existing PR branch)
         if activity["kind"] != "respond_review":
             container_mgr.reset_repo(repo_id)
+
+        # 3.5. Index repo code definitions (for context retrieval)
+        try:
+            sha_result = container_mgr.exec("git rev-parse HEAD", workdir=f"/repos/{repo_id}")
+            current_sha = sha_result.stdout.strip() if sha_result.exit_code == 0 else None
+            _index_repo_from_container(repo_id, container_mgr, store, current_sha)
+        except Exception as e:
+            logger.debug("Code indexing skipped: %s", e)
 
         # 4.5. Retrieve code context (optional, graceful degradation)
         code_context_md = ""
