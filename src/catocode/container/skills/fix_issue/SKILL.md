@@ -19,6 +19,17 @@ Before starting, gather the necessary context:
    - Any special reproduction requirements
 3. **Fetch the issue**: Use `gh issue view {issue_number}` to get the full issue description
 
+## Using Pre-loaded Code Context
+
+If a "Pre-loaded Code Context" section appears below, CatoCode has already identified potentially relevant code locations based on the issue description. Use this as your starting point:
+
+1. **Read the identified files first** — they are likely where the bug lives
+2. **Follow the dependency chain** — if a function calls another, read the callee too
+3. **Check nearby test files** — look in `tests/` for files matching the source path
+4. **Don't stop here** — the pre-loaded context may be incomplete. Continue exploring if the root cause isn't in the listed files.
+
+If no code context is provided, start exploration from scratch using the repo's CLAUDE.md and `grep`/`find` tools.
+
 ## The Two-Layer Evidence Protocol
 
 This is what makes RepoCraft different from other AI agents. Follow this rigorously.

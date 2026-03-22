@@ -29,6 +29,13 @@ If you see a highly similar issue in the list above:
 
 Only continue to the analysis steps below if no duplicate was found.
 
+## Using Pre-loaded Code Context
+
+If a "Pre-loaded Code Context" section appears below, use it to:
+1. Identify which files/functions are likely affected
+2. Assess the scope of the issue more quickly
+3. Provide more specific file references in your analysis comment
+
 ## Your Task
 
 1. **Classify the issue type:**
