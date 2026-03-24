@@ -77,7 +77,9 @@ async def run(prompt: str, max_turns: int, cwd: str, session_id: str | None = No
     """Run SDK query and stream output. Returns 0 on success, 1 on error."""
     options = ClaudeAgentOptions(
         permission_mode="bypassPermissions",
+        allowed_tools=["Read", "Edit", "Write", "Grep", "Glob", "Bash", "Skill"],
         disallowed_tools=["AskUserQuestion", "EnterPlanMode"],
+        setting_sources=["user", "project"],
         max_turns=max_turns,
         cwd=Path(cwd),
     )

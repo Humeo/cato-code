@@ -90,11 +90,8 @@ async def cmd_watch(args: argparse.Namespace) -> int:
 
     repo_id = repo_id_from_url(repo_url)
     store = Store()
-    container_mgr = ContainerManager()
 
     try:
-        anthropic_api_key = get_anthropic_api_key()
-        anthropic_base_url = get_anthropic_base_url()
         auth = get_auth()
         github_token = await auth.get_token()
     except RuntimeError as e:
@@ -123,21 +120,15 @@ async def cmd_watch(args: argparse.Namespace) -> int:
 
     console.print(f"[green]Watching[/green] {repo_url} (repo_id: {repo_id})")
 
-    # Trigger init if not done yet
-    result = None
-    try:
-        container_mgr.ensure_running(anthropic_api_key, github_token, anthropic_base_url)
-        container_mgr.ensure_repo(repo_id, repo_url)
-        result = container_mgr.exec(f"test -f /repos/{repo_id}/CLAUDE.md")
-    except RuntimeError as e:
-        console.print(f"[yellow]Container not available: {e}[/yellow]")
-        console.print("[dim]Repo registered. Start daemon to initialize and begin watching.[/dim]")
-        return 0
-
-    if result and result.exit_code != 0:
-        console.print(f"[dim]Queuing init activity for {repo_id}...[/dim]")
-        activity_id = store.add_activity(repo_id, "init", "watch")
-        console.print(f"[dim]Init activity {activity_id[:8]} queued. Start daemon to run.[/dim]")
+    activity_id = store.add_activity(repo_id, "setup", "watch")
+    store.update_repo_lifecycle(
+        repo_id,
+        lifecycle_status="setting_up",
+        last_error=None,
+        last_setup_activity_id=activity_id,
+    )
+    console.print(f"[dim]Queued setup activity {activity_id[:8]} for {repo_id}.[/dim]")
+    console.print("[dim]Start daemon to run setup and begin watching.[/dim]")
 
     return 0
 

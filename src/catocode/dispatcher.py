@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from .config import parse_repo_url
@@ -29,6 +30,62 @@ HARD_TIMEOUT_SECS = 7200  # 2 hours absolute maximum
 MAX_RETRIES = 3           # SDK runner retries on transient failure
 RETRY_DELAY_SECS = 30     # Delay between retries
 
+SETUP_STEP_KEYS = ("clone", "init_claude_md", "cg_index", "health_check")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _duration_ms(started_at: str, finished_at: str) -> int | None:
+    try:
+        started = datetime.fromisoformat(started_at)
+        finished = datetime.fromisoformat(finished_at)
+    except ValueError:
+        return None
+    return max(0, int((finished - started).total_seconds() * 1000))
+
+
+def _start_activity_step(
+    store: "Store",
+    activity_id: str,
+    step_key: str,
+    metadata: dict | None = None,
+) -> str:
+    started_at = _now_iso()
+    store.upsert_activity_step(
+        activity_id,
+        step_key,
+        status="running",
+        started_at=started_at,
+        finished_at=None,
+        duration_ms=None,
+        reason=None,
+        metadata=metadata,
+    )
+    return started_at
+
+
+def _finish_activity_step(
+    store: "Store",
+    activity_id: str,
+    step_key: str,
+    started_at: str,
+    status: str,
+    reason: str | None = None,
+    metadata: dict | None = None,
+) -> None:
+    finished_at = _now_iso()
+    store.upsert_activity_step(
+        activity_id,
+        step_key,
+        status=status,
+        finished_at=finished_at,
+        duration_ms=_duration_ms(started_at, finished_at),
+        reason=reason,
+        metadata=metadata,
+    )
+
 
 def _index_repo_from_container(
     repo_id: str,
@@ -37,8 +94,9 @@ def _index_repo_from_container(
     current_commit: str | None = None,
 ) -> None:
     """Index code definitions by reading files from the container."""
-    from .code_indexer import parse_file, detect_language
     import json as _json
+
+    from .code_indexer import detect_language, parse_file
 
     # Check if re-index needed
     state = store.get_code_index_state(repo_id)
@@ -131,20 +189,43 @@ async def dispatch(
         # 1. Ensure container running
         container_mgr.ensure_running(anthropic_api_key, github_token, anthropic_base_url)
 
+        if activity["kind"] == "setup":
+            await _run_setup(
+                activity_id=activity_id,
+                repo_id=repo_id,
+                repo_url=repo_url,
+                store=store,
+                container_mgr=container_mgr,
+                verbose=verbose,
+            )
+            return
+
         # 2. Ensure repo cloned
         container_mgr.ensure_repo(repo_id, repo_url)
 
-        # 3. Check if repo needs init (look at origin, since local is about to be reset)
-        result = container_mgr.exec(
-            "git ls-tree -r HEAD --name-only | grep -x CLAUDE.md",
-            workdir=f"/repos/{repo_id}",
-        )
-        needs_init = result.exit_code != 0
+        # 3. Ensure repo setup is complete before other activity kinds proceed.
+        needs_setup = repo.get("lifecycle_status") != "ready"
+        if not needs_setup:
+            result = container_mgr.exec("test -f CLAUDE.md", workdir=f"/repos/{repo_id}")
+            needs_setup = result.exit_code != 0
 
-        if needs_init:
-            logger.info("Repo %s needs init, running init activity first", repo_id)
-            init_activity_id = store.add_activity(repo_id, "init", "auto")
-            await _run_init(init_activity_id, repo_id, store, container_mgr, verbose)
+        if needs_setup:
+            logger.info("Repo %s needs setup, running setup activity first", repo_id)
+            setup_activity_id = store.add_activity(repo_id, "setup", "auto")
+            await _run_setup(
+                activity_id=setup_activity_id,
+                repo_id=repo_id,
+                repo_url=repo_url,
+                store=store,
+                container_mgr=container_mgr,
+                verbose=verbose,
+            )
+            setup_activity = store.get_activity(setup_activity_id)
+            if setup_activity is None or setup_activity["status"] != "done":
+                summary = "Repo setup failed"
+                if setup_activity is not None and setup_activity.get("summary"):
+                    summary = setup_activity["summary"]
+                raise RuntimeError(summary)
 
         # 4. Reset repo to clean state (skip for respond_review — needs existing PR branch)
         if activity["kind"] != "respond_review":
@@ -248,12 +329,26 @@ async def dispatch(
     except asyncio.TimeoutError:
         summary = "Timeout: activity exceeded time limit"
         store.update_activity(activity_id, status="failed", summary=summary)
+        if activity["kind"] == "setup":
+            store.update_repo_lifecycle(
+                repo_id,
+                lifecycle_status="error",
+                last_error=summary,
+                last_setup_activity_id=activity_id,
+            )
         logger.error("Activity %s timed out", activity_id)
         await _notify_failure(activity, repo, github_token, summary)
         raise
     except Exception as e:
         summary = f"Error: {e}"
         store.update_activity(activity_id, status="failed", summary=summary)
+        if activity["kind"] == "setup":
+            store.update_repo_lifecycle(
+                repo_id,
+                lifecycle_status="error",
+                last_error=summary,
+                last_setup_activity_id=activity_id,
+            )
         logger.exception("Activity %s failed with exception", activity_id)
         await _notify_failure(activity, repo, github_token, summary)
         raise
@@ -296,34 +391,164 @@ async def _notify_failure(
     await post_issue_comment(owner, repo_name, issue_number, body, github_token)
 
 
-async def _run_init(
+async def _run_setup(
     activity_id: str,
     repo_id: str,
+    repo_url: str,
     store: Store,
     container_mgr: ContainerManager,
     verbose: bool,
 ) -> None:
-    """Run init activity to explore repo and generate CLAUDE.md."""
+    """Run repo setup and mark lifecycle state based on the result."""
     prompt = get_init_prompt()
-    store.update_activity(activity_id, status="running")
+    repo_workdir = f"/repos/{repo_id}"
+    last_session_id: str | None = None
+    last_cost_usd: float | None = None
 
-    exit_code, session_id, _ = await _execute_sdk_runner(
-        activity_id=activity_id,
-        repo_id=repo_id,
-        prompt=prompt,
-        store=store,
-        container_mgr=container_mgr,
-        max_turns=50,  # Init uses more generous 50 turns for thorough exploration
-        verbose=verbose,
+    store.update_activity(activity_id, status="running")
+    store.update_repo_lifecycle(
+        repo_id,
+        lifecycle_status="setting_up",
+        last_error=None,
+        last_setup_activity_id=activity_id,
     )
 
-    summary = _extract_summary(store.get_logs(activity_id))
-    if exit_code == 0:
-        store.update_activity(activity_id, status="done", summary=summary, session_id=session_id)
-        logger.info("Init activity %s completed", activity_id)
-    else:
-        store.update_activity(activity_id, status="failed", summary=summary)
-        logger.warning("Init activity %s failed", activity_id)
+    for attempt in range(1, MAX_RETRIES + 1):
+        current_step: str | None = None
+        current_step_started_at: str | None = None
+
+        try:
+            current_step = "clone"
+            current_step_started_at = _start_activity_step(
+                store,
+                activity_id,
+                current_step,
+                metadata={"attempt": attempt},
+            )
+            container_mgr.ensure_repo(repo_id, repo_url)
+            _finish_activity_step(store, activity_id, current_step, current_step_started_at, "done")
+
+            current_step = "init_claude_md"
+            current_step_started_at = _start_activity_step(
+                store,
+                activity_id,
+                current_step,
+                metadata={"attempt": attempt},
+            )
+            exit_code, last_session_id, last_cost_usd = await _execute_sdk_runner(
+                activity_id=activity_id,
+                repo_id=repo_id,
+                prompt=prompt,
+                store=store,
+                container_mgr=container_mgr,
+                max_turns=50,
+                verbose=verbose,
+            )
+            if exit_code != 0:
+                summary = _extract_summary(store.get_logs(activity_id))
+                if not summary or summary == "No output":
+                    summary = "init_claude_md failed"
+                raise RuntimeError(summary)
+            _finish_activity_step(store, activity_id, current_step, current_step_started_at, "done")
+
+            current_step = "cg_index"
+            current_step_started_at = _start_activity_step(
+                store,
+                activity_id,
+                current_step,
+                metadata={"attempt": attempt},
+            )
+            result = container_mgr.exec("cg index .", workdir=repo_workdir)
+            if result.exit_code != 0:
+                detail = result.combined or "cg index failed"
+                raise RuntimeError(detail)
+            _finish_activity_step(
+                store,
+                activity_id,
+                current_step,
+                current_step_started_at,
+                "done",
+                metadata={"attempt": attempt},
+            )
+
+            current_step = "health_check"
+            current_step_started_at = _start_activity_step(
+                store,
+                activity_id,
+                current_step,
+                metadata={"attempt": attempt},
+            )
+            result = container_mgr.exec("test -f CLAUDE.md && cg stats --root .", workdir=repo_workdir)
+            if result.exit_code != 0:
+                detail = result.combined or "health check failed"
+                raise RuntimeError(detail)
+            _finish_activity_step(
+                store,
+                activity_id,
+                current_step,
+                current_step_started_at,
+                "done",
+                metadata={"attempt": attempt},
+            )
+
+            summary = _extract_summary(store.get_logs(activity_id))
+            store.update_activity(
+                activity_id,
+                status="done",
+                summary=summary,
+                session_id=last_session_id,
+                cost_usd=last_cost_usd,
+            )
+            store.update_repo_lifecycle(
+                repo_id,
+                lifecycle_status="ready",
+                last_ready_at=_now_iso(),
+                last_error=None,
+                last_setup_activity_id=activity_id,
+            )
+            logger.info("Setup activity %s completed", activity_id)
+            return
+        except Exception as exc:
+            error_summary = str(exc).strip() or "setup failed"
+            if current_step is not None and current_step_started_at is not None:
+                _finish_activity_step(
+                    store,
+                    activity_id,
+                    current_step,
+                    current_step_started_at,
+                    "failed",
+                    reason=error_summary,
+                    metadata={"attempt": attempt},
+                )
+
+            if attempt < MAX_RETRIES:
+                logger.warning(
+                    "Setup activity %s attempt %d/%d failed at %s: %s. Retrying in %ds",
+                    activity_id[:8],
+                    attempt,
+                    MAX_RETRIES,
+                    current_step or "unknown",
+                    error_summary,
+                    RETRY_DELAY_SECS,
+                )
+                await asyncio.sleep(RETRY_DELAY_SECS)
+                continue
+
+            store.update_activity(
+                activity_id,
+                status="failed",
+                summary=error_summary,
+                session_id=last_session_id,
+                cost_usd=last_cost_usd,
+            )
+            store.update_repo_lifecycle(
+                repo_id,
+                lifecycle_status="error",
+                last_error=error_summary,
+                last_setup_activity_id=activity_id,
+            )
+            logger.warning("Setup activity %s failed after %d attempts", activity_id[:8], MAX_RETRIES)
+            return
 
 
 async def _build_prompt(activity: dict, repo: dict, github_token: str, store: "Store | None" = None, code_context_md: str = "") -> str:

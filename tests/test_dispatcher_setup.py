@@ -1,0 +1,199 @@
+from __future__ import annotations
+
+import argparse
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from catocode.store import Store
+
+
+class FakeExecResult:
+    def __init__(self, exit_code: int = 0, stdout: str = "", stderr: str = "") -> None:
+        self.exit_code = exit_code
+        self.stdout = stdout
+        self.stderr = stderr
+
+    @property
+    def combined(self) -> str:
+        parts = []
+        if self.stdout:
+            parts.append(self.stdout)
+        if self.stderr:
+            parts.append(f"[stderr]\n{self.stderr}")
+        return "\n".join(parts)
+
+
+class SuccessfulSetupContainerManager:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str | None]] = []
+
+    def ensure_running(self, anthropic_api_key: str, github_token: str, anthropic_base_url: str | None = None) -> None:
+        self.calls.append(("ensure_running", anthropic_base_url))
+
+    def ensure_repo(self, repo_id: str, repo_url: str) -> None:
+        self.calls.append(("ensure_repo", repo_id))
+
+    def exec(self, command: str, workdir: str = "/repos") -> FakeExecResult:
+        self.calls.append((command, workdir))
+        if command.startswith("cg index"):
+            return FakeExecResult(exit_code=0, stdout="Indexed /repos/owner-repo\n")
+        if "cg stats" in command:
+            return FakeExecResult(exit_code=0, stdout="Files: 12\nSymbols: 34\n")
+        raise AssertionError(f"Unexpected command: {command}")
+
+    def reset_repo(self, repo_id: str) -> None:
+        self.calls.append(("reset_repo", repo_id))
+
+
+class FailingSetupContainerManager:
+    def __init__(self) -> None:
+        self.ensure_repo_attempts = 0
+
+    def ensure_running(self, anthropic_api_key: str, github_token: str, anthropic_base_url: str | None = None) -> None:
+        return None
+
+    def ensure_repo(self, repo_id: str, repo_url: str) -> None:
+        self.ensure_repo_attempts += 1
+        raise RuntimeError("clone failed")
+
+    def exec(self, command: str, workdir: str = "/repos") -> FakeExecResult:
+        raise AssertionError(f"exec should not run after clone failure: {command}")
+
+    def reset_repo(self, repo_id: str) -> None:
+        raise AssertionError("reset_repo should not run for setup retries")
+
+
+@pytest.fixture
+def store(tmp_path):
+    return Store(db_path=tmp_path / "test.db")
+
+
+@pytest.mark.asyncio
+async def test_watch_queues_setup_not_init(store, monkeypatch):
+    from catocode import cli
+
+    monkeypatch.setattr(cli, "Store", lambda: store)
+
+    def fail_if_container_manager_used():
+        raise AssertionError("watch should not instantiate ContainerManager")
+
+    monkeypatch.setattr(cli, "ContainerManager", fail_if_container_manager_used)
+    monkeypatch.setattr(cli, "get_auth", lambda: SimpleNamespace(get_token=AsyncMock(return_value="token")))
+    monkeypatch.setattr(cli, "get_patrol_config", lambda: SimpleNamespace(max_issues=5, window_hours=24))
+    monkeypatch.setattr(
+        "catocode.github.permissions.check_repo_write_access",
+        AsyncMock(return_value=(True, "write access confirmed")),
+    )
+
+    exit_code = await cli.cmd_watch(
+        argparse.Namespace(repo_url="https://github.com/owner/repo")
+    )
+
+    assert exit_code == 0
+    activities = store.list_activities(repo_id="owner-repo")
+    assert len(activities) == 1
+    assert activities[0]["kind"] == "setup"
+    assert activities[0]["trigger"] == "watch"
+
+    repo = store.get_repo("owner-repo")
+    assert repo is not None
+    assert repo["watch"] == 1
+    assert repo["lifecycle_status"] == "setting_up"
+
+
+@pytest.mark.asyncio
+async def test_setup_marks_repo_ready_after_clone_init_claude_md_cg_index_health_check(
+    store,
+    monkeypatch,
+):
+    from catocode.dispatcher import dispatch
+
+    repo_id = "owner-repo"
+    store.add_repo(repo_id, "https://github.com/owner/repo")
+    activity_id = store.add_activity(repo_id, "setup", "watch")
+
+    container_mgr = SuccessfulSetupContainerManager()
+
+    async def fake_execute_sdk_runner(**kwargs):
+        assert kwargs["activity_id"] == activity_id
+        assert kwargs["repo_id"] == repo_id
+        return 0, "session-123", 0.42
+
+    monkeypatch.setattr("catocode.dispatcher._execute_sdk_runner", fake_execute_sdk_runner)
+
+    await dispatch(
+        activity_id=activity_id,
+        store=store,
+        container_mgr=container_mgr,
+        anthropic_api_key="anthropic-key",
+        github_token="github-token",
+        verbose=False,
+    )
+
+    activity = store.get_activity(activity_id)
+    assert activity is not None
+    assert activity["status"] == "done"
+    assert activity["session_id"] == "session-123"
+
+    repo = store.get_repo(repo_id)
+    assert repo is not None
+    assert repo["lifecycle_status"] == "ready"
+    assert repo["last_setup_activity_id"] == activity_id
+    assert repo["last_error"] is None
+    assert repo["last_ready_at"] is not None
+
+    steps = store.list_activity_steps(activity_id)
+    assert [step["step_key"] for step in steps] == [
+        "clone",
+        "init_claude_md",
+        "cg_index",
+        "health_check",
+    ]
+    assert all(step["status"] == "done" for step in steps)
+
+
+@pytest.mark.asyncio
+async def test_setup_marks_repo_error_after_three_failed_attempts(store, monkeypatch):
+    from catocode.dispatcher import dispatch
+
+    repo_id = "owner-repo"
+    store.add_repo(repo_id, "https://github.com/owner/repo")
+    activity_id = store.add_activity(repo_id, "setup", "watch")
+
+    container_mgr = FailingSetupContainerManager()
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr("catocode.dispatcher.asyncio.sleep", fake_sleep)
+
+    await dispatch(
+        activity_id=activity_id,
+        store=store,
+        container_mgr=container_mgr,
+        anthropic_api_key="anthropic-key",
+        github_token="",
+        verbose=False,
+    )
+
+    activity = store.get_activity(activity_id)
+    assert activity is not None
+    assert activity["status"] == "failed"
+    assert "clone failed" in (activity["summary"] or "")
+
+    repo = store.get_repo(repo_id)
+    assert repo is not None
+    assert repo["lifecycle_status"] == "error"
+    assert repo["last_setup_activity_id"] == activity_id
+    assert "clone failed" in (repo["last_error"] or "")
+
+    clone_step = store.get_activity_step(activity_id, "clone")
+    assert clone_step is not None
+    assert clone_step["status"] == "failed"
+    assert "clone failed" in (clone_step["reason"] or "")
+
+    assert container_mgr.ensure_repo_attempts == 3
+    assert sleep_calls == [30, 30]
