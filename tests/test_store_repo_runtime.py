@@ -299,3 +299,44 @@ def test_mark_crashed_setup_activities_fail_repo_readiness(store):
     assert repo["lifecycle_status"] == "error"
     assert repo["last_error"] == "Interrupted (daemon restarted)"
     assert repo["last_setup_activity_id"] == activity_id
+
+
+def test_store_restart_does_not_resurrect_repo_after_newer_failed_setup(tmp_path):
+    db_path = tmp_path / "restart.db"
+    store = Store(db_path=db_path)
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+
+    successful_setup_id = store.add_activity("owner-repo", "setup", "watch")
+    store.update_activity(
+        successful_setup_id,
+        status="done",
+        summary="setup complete",
+    )
+    store.update_repo_lifecycle(
+        "owner-repo",
+        lifecycle_status="ready",
+        last_ready_at="2026-03-24T12:10:00+00:00",
+        last_error=None,
+        last_setup_activity_id=successful_setup_id,
+    )
+
+    failed_setup_id = store.add_activity("owner-repo", "setup", "retry")
+    store.update_activity(
+        failed_setup_id,
+        status="failed",
+        summary="setup failed",
+    )
+    store.update_repo_lifecycle(
+        "owner-repo",
+        lifecycle_status="error",
+        last_error="setup failed",
+        last_setup_activity_id=failed_setup_id,
+    )
+
+    reopened = Store(db_path=db_path)
+    repo = reopened.get_repo("owner-repo")
+
+    assert repo is not None
+    assert repo["lifecycle_status"] == "error"
+    assert repo["last_error"] == "setup failed"
+    assert repo["last_setup_activity_id"] == failed_setup_id

@@ -260,38 +260,35 @@ class Store:
         self._db.execute(
             """UPDATE repos
                SET lifecycle_status = 'ready',
-                   last_ready_at = COALESCE(
-                       last_ready_at,
-                       (
-                           SELECT a.updated_at
-                           FROM activities a
-                           WHERE a.repo_id = repos.id
-                             AND a.kind = 'setup'
-                             AND a.status = 'done'
-                           ORDER BY a.updated_at DESC
-                           LIMIT 1
-                       )
+                   last_ready_at = (
+                       SELECT a.updated_at
+                       FROM activities a
+                       WHERE a.repo_id = repos.id
+                         AND a.kind = 'setup'
+                       ORDER BY a.updated_at DESC
+                       LIMIT 1
                    ),
-                   last_setup_activity_id = COALESCE(
-                       last_setup_activity_id,
-                       (
-                           SELECT a.id
-                           FROM activities a
-                           WHERE a.repo_id = repos.id
-                             AND a.kind = 'setup'
-                             AND a.status = 'done'
-                           ORDER BY a.updated_at DESC
-                           LIMIT 1
-                       )
-                   )
-               WHERE EXISTS (
-                   SELECT 1
-                   FROM activities a
-                   WHERE a.repo_id = repos.id
-                     AND a.kind = 'setup'
-                     AND a.status = 'done'
-               )
-                 AND lifecycle_status != 'ready'"""
+                   last_setup_activity_id = (
+                       SELECT a.id
+                       FROM activities a
+                       WHERE a.repo_id = repos.id
+                         AND a.kind = 'setup'
+                       ORDER BY a.updated_at DESC
+                       LIMIT 1
+                   ),
+                   last_error = NULL
+               WHERE lifecycle_status != 'ready'
+                 AND last_setup_activity_id IS NULL
+                 AND last_ready_at IS NULL
+                 AND last_error IS NULL
+                 AND (
+                     SELECT a.status
+                     FROM activities a
+                     WHERE a.repo_id = repos.id
+                       AND a.kind = 'setup'
+                     ORDER BY a.updated_at DESC
+                     LIMIT 1
+                 ) = 'done'"""
         )
         self._db.commit()
 
