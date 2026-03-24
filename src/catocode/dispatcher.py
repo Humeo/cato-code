@@ -557,10 +557,7 @@ async def _build_prompt(activity: dict, repo: dict, github_token: str, store: "S
     trigger = activity["trigger"] or ""
     owner, repo_name = parse_repo_url(repo["repo_url"])
 
-    if kind == "init":
-        return get_init_prompt()
-
-    elif kind == "fix_issue":
+    if kind == "fix_issue":
         # Trigger format: "issue:123"
         if not trigger.startswith("issue:"):
             raise ValueError(f"Invalid trigger for fix_issue: {trigger!r}")

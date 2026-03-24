@@ -197,3 +197,18 @@ async def test_setup_marks_repo_error_after_three_failed_attempts(store, monkeyp
 
     assert container_mgr.ensure_repo_attempts == 3
     assert sleep_calls == [30, 30]
+
+
+@pytest.mark.asyncio
+async def test_build_prompt_rejects_legacy_init_activity_kind():
+    from catocode.dispatcher import _build_prompt
+
+    activity = {
+        "kind": "init",
+        "trigger": "watch",
+        "repo_id": "owner-repo",
+    }
+    repo = {"id": "owner-repo", "repo_url": "https://github.com/owner/repo"}
+
+    with pytest.raises(ValueError, match="Unknown activity kind: 'init'"):
+        await _build_prompt(activity, repo, "fake-token")
