@@ -255,6 +255,9 @@ class Store:
                     pass
                 else:
                     _logger.warning("Migration skipped with unexpected error: %s | SQL: %.120s", e, migration)
+        # Rewrite legacy init activities after schema upgrades so runtime only needs setup.
+        self._db.execute("UPDATE activities SET kind = 'setup' WHERE kind = 'init'")
+        self._db.commit()
 
     # --- repos ---
 

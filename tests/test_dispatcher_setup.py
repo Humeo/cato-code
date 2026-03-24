@@ -150,6 +150,38 @@ async def test_watch_queues_setup_not_init(store, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_watch_ready_repo_is_idempotent(store, monkeypatch):
+    from catocode import cli
+
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo("owner-repo", watch=1)
+    store.update_repo_lifecycle(
+        "owner-repo",
+        lifecycle_status="ready",
+        last_ready_at="2026-03-24T12:00:00+00:00",
+    )
+
+    monkeypatch.setattr(cli, "Store", lambda: store)
+    monkeypatch.setattr(cli, "get_auth", lambda: SimpleNamespace(get_token=AsyncMock(return_value="token")))
+    monkeypatch.setattr(cli, "get_patrol_config", lambda: SimpleNamespace(max_issues=5, window_hours=24))
+    monkeypatch.setattr(
+        "catocode.github.permissions.check_repo_write_access",
+        AsyncMock(return_value=(True, "write access confirmed")),
+    )
+
+    exit_code = await cli.cmd_watch(
+        argparse.Namespace(repo_url="https://github.com/owner/repo")
+    )
+
+    assert exit_code == 0
+    assert store.list_activities(repo_id="owner-repo") == []
+    repo = store.get_repo("owner-repo")
+    assert repo is not None
+    assert repo["lifecycle_status"] == "ready"
+    assert repo["watch"] == 1
+
+
+@pytest.mark.asyncio
 async def test_setup_marks_repo_ready_after_clone_init_claude_md_cg_index_health_check(
     store,
     monkeypatch,
@@ -300,6 +332,61 @@ async def test_dispatch_reuses_existing_pending_setup_activity(store, monkeypatc
 
     assert executed_activity_ids[0] == queued_setup_id
     assert executed_activity_ids[1] == task_activity_id
+
+
+@pytest.mark.asyncio
+async def test_dispatch_waits_for_existing_running_setup_activity(store, monkeypatch):
+    from catocode.dispatcher import dispatch
+
+    repo_id = "owner-repo"
+    store.add_repo(repo_id, "https://github.com/owner/repo")
+    store.update_repo_lifecycle(repo_id, lifecycle_status="setting_up")
+    setup_activity_id = store.add_activity(repo_id, "setup", "watch")
+    store.update_activity(setup_activity_id, status="running", summary="setup running")
+    task_activity_id = store.add_activity(repo_id, "task", "do the thing")
+
+    container_mgr = ReusableSetupContainerManager()
+    executed_activity_ids: list[str] = []
+    sleep_calls = 0
+
+    async def fake_sleep(delay: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        store.update_activity(setup_activity_id, status="done", summary="setup done")
+        store.update_repo_lifecycle(
+            repo_id,
+            lifecycle_status="ready",
+            last_ready_at="2026-03-24T12:00:00+00:00",
+            last_error=None,
+            last_setup_activity_id=setup_activity_id,
+        )
+
+    async def fake_execute_sdk_runner(**kwargs):
+        executed_activity_ids.append(kwargs["activity_id"])
+        return 0, f"session-{kwargs['activity_id'][:8]}", 0.1
+
+    monkeypatch.setattr("catocode.dispatcher.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("catocode.dispatcher._execute_sdk_runner", fake_execute_sdk_runner)
+    monkeypatch.setattr("catocode.dispatcher._index_repo_from_container", lambda *args, **kwargs: None)
+
+    await dispatch(
+        activity_id=task_activity_id,
+        store=store,
+        container_mgr=container_mgr,
+        anthropic_api_key="anthropic-key",
+        github_token="github-token",
+        verbose=False,
+    )
+
+    assert sleep_calls == 1
+    activities = store.list_activities(repo_id=repo_id)
+    assert len(activities) == 2
+    assert [activity["kind"] for activity in activities] == ["setup", "task"]
+    assert executed_activity_ids == [task_activity_id]
+
+    task_activity = store.get_activity(task_activity_id)
+    assert task_activity is not None
+    assert task_activity["status"] == "done"
 
 
 @pytest.mark.asyncio

@@ -90,6 +90,7 @@ async def cmd_watch(args: argparse.Namespace) -> int:
 
     repo_id = repo_id_from_url(repo_url)
     store = Store()
+    existing_repo = store.get_repo(repo_id)
 
     try:
         auth = get_auth()
@@ -119,6 +120,14 @@ async def cmd_watch(args: argparse.Namespace) -> int:
     store.init_patrol_budget(repo_id, patrol_cfg.max_issues, patrol_cfg.window_hours)
 
     console.print(f"[green]Watching[/green] {repo_url} (repo_id: {repo_id})")
+
+    if existing_repo is not None and existing_repo.get("lifecycle_status") == "ready":
+        console.print(f"[dim]{repo_id} is already ready. No new setup queued.[/dim]")
+        return 0
+
+    if existing_repo is not None and existing_repo.get("lifecycle_status") == "setting_up":
+        console.print(f"[dim]{repo_id} is already setting up. No duplicate setup queued.[/dim]")
+        return 0
 
     activity_id = store.add_activity(repo_id, "setup", "watch")
     store.update_repo_lifecycle(

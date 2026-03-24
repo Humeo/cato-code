@@ -168,3 +168,56 @@ def test_store_migrates_existing_database_schema(tmp_path):
     step = store.get_activity_step(activity_id, "bootstrap")
     assert step is not None
     assert step["status"] == "running"
+
+
+def test_store_migrates_legacy_init_activities_to_setup(tmp_path):
+    db_path = tmp_path / "legacy-init.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS repos (
+            id TEXT PRIMARY KEY,
+            repo_url TEXT NOT NULL,
+            watch INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS activities (
+            id TEXT PRIMARY KEY,
+            repo_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            trigger TEXT,
+            status TEXT DEFAULT 'pending',
+            session_id TEXT,
+            summary TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (repo_id) REFERENCES repos(id)
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO repos (id, repo_url, created_at) VALUES (?, ?, ?)",
+        ("owner-repo", "https://github.com/owner/repo", "2026-03-24T12:00:00+00:00"),
+    )
+    conn.execute(
+        "INSERT INTO activities (id, repo_id, kind, trigger, status, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            "activity-init",
+            "owner-repo",
+            "init",
+            "watch",
+            "pending",
+            "2026-03-24T12:00:00+00:00",
+            "2026-03-24T12:00:00+00:00",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    store = Store(db_path=db_path)
+    activity = store.get_activity("activity-init")
+
+    assert activity is not None
+    assert activity["kind"] == "setup"

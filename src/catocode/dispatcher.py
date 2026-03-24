@@ -29,6 +29,7 @@ IDLE_TIMEOUT_SECS = 600   # 10 minutes without output → kill
 HARD_TIMEOUT_SECS = 7200  # 2 hours absolute maximum
 MAX_RETRIES = 3           # SDK runner retries on transient failure
 RETRY_DELAY_SECS = 30     # Delay between retries
+SETUP_WAIT_POLL_SECS = 1
 
 SETUP_STEP_KEYS = ("clone", "init_claude_md", "cg_index", "health_check")
 
@@ -101,6 +102,22 @@ def _find_reusable_setup_activity(
             continue
         return candidate
     return None
+
+
+async def _wait_for_activity_completion(
+    store: "Store",
+    activity_id: str,
+    poll_secs: int = SETUP_WAIT_POLL_SECS,
+    timeout_secs: int = HARD_TIMEOUT_SECS,
+) -> dict | None:
+    started = asyncio.get_event_loop().time()
+    while True:
+        activity = store.get_activity(activity_id)
+        if activity is None or activity["status"] not in {"pending", "running"}:
+            return activity
+        if asyncio.get_event_loop().time() - started >= timeout_secs:
+            raise asyncio.TimeoutError(f"Timed out waiting for activity {activity_id}")
+        await asyncio.sleep(poll_secs)
 
 
 def _index_repo_from_container(
@@ -251,13 +268,12 @@ async def dispatch(
                 )
                 setup_activity = store.get_activity(setup_activity["id"])
             else:
-                logger.info("Repo %s setup already running via %s", repo_id, setup_activity["id"])
+                logger.info("Repo %s setup already running via %s; waiting", repo_id, setup_activity["id"])
+                setup_activity = await _wait_for_activity_completion(store, setup_activity["id"])
             if setup_activity is None or setup_activity["status"] != "done":
                 summary = "Repo setup failed"
                 if setup_activity is not None and setup_activity.get("summary"):
                     summary = setup_activity["summary"]
-                elif setup_activity is not None and setup_activity["status"] == "running":
-                    summary = "Repo setup still running"
                 raise RuntimeError(summary)
 
         # 4. Reset repo to clean state (skip for respond_review — needs existing PR branch)
