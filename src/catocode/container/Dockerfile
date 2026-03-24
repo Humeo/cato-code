@@ -22,6 +22,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # Layer 3: Python uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
+ENV UV_BREAK_SYSTEM_PACKAGES=1
 
 # Layer 4: Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code@latest
@@ -30,7 +31,7 @@ RUN npm install -g @anthropic-ai/claude-code@latest
 RUN pip3 install --break-system-packages claude-agent-sdk
 
 # Layer 6: Vendored Codebase Graph source
-COPY vendor/codebase-graph/ /tmp/codebase-graph/
+COPY vendor/codebase-graph/ /app/vendor/codebase-graph/
 
 # Layer 7: Playwright Python package (browser installed on demand, not at build time)
 RUN pip3 install --break-system-packages playwright
@@ -50,12 +51,7 @@ RUN useradd -m -s /bin/bash catocode && \
 
 # Layer 10: Install Codebase Graph CLI for the non-root user
 # Step 2 expectation: RUN uv pip install --system /app/vendor/codebase-graph
-# Actual worker install keeps the working non-root path:
-# HOME=/home/catocode uv tool install --force --python 3.12 /tmp/codebase-graph
-RUN HOME=/home/catocode uv python install 3.12 \
-    && HOME=/home/catocode uv tool install --force --python 3.12 /tmp/codebase-graph \
-    && chown -R catocode:catocode /home/catocode/.local \
-    && rm -rf /tmp/codebase-graph
+RUN uv pip install --system /app/vendor/codebase-graph
 
 # Layer 11: Copy SDK runner script
 COPY scripts/run_activity.py /app/run_activity.py

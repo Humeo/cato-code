@@ -2,7 +2,7 @@
 name = "codebase-graph"
 version = "0.1.0"
 description = "Code navigation & context compression for agents"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "click>=8.1",
     "tree-sitter>=0.24",
