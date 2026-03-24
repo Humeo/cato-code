@@ -49,7 +49,9 @@ RUN useradd -m -s /bin/bash catocode && \
     chown -R catocode:catocode /repos /output /app /home/catocode/.catocode /home/catocode/.local
 
 # Layer 10: Install Codebase Graph CLI for the non-root user
-# Step 2 expectation: uv tool install --force --python 3.12 /tmp/codebase-graph
+# Step 2 expectation: RUN uv pip install --system /app/vendor/codebase-graph
+# Actual worker install keeps the working non-root path:
+# HOME=/home/catocode uv tool install --force --python 3.12 /tmp/codebase-graph
 RUN HOME=/home/catocode uv python install 3.12 \
     && HOME=/home/catocode uv tool install --force --python 3.12 /tmp/codebase-graph \
     && chown -R catocode:catocode /home/catocode/.local \
