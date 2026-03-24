@@ -178,6 +178,14 @@ CREATE TABLE IF NOT EXISTS code_index_state (
     symbol_count INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS codebase_graph_state (
+    repo_id TEXT PRIMARY KEY,
+    last_indexed_commit TEXT,
+    last_indexed_at TEXT,
+    file_count INTEGER DEFAULT 0,
+    symbol_count INTEGER DEFAULT 0
+);
+
 CREATE INDEX IF NOT EXISTS idx_code_defs_repo_name ON code_definitions(repo_id, symbol_name);
 CREATE INDEX IF NOT EXISTS idx_code_defs_repo_file ON code_definitions(repo_id, file_path);
 """
@@ -1154,10 +1162,25 @@ class Store:
         file_count: int,
         symbol_count: int,
     ) -> None:
-        self.update_code_index_state(repo_id, commit_sha, file_count, symbol_count)
+        now = _now()
+        self._db.execute(
+            """INSERT INTO codebase_graph_state
+               (repo_id, last_indexed_commit, last_indexed_at, file_count, symbol_count)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(repo_id) DO UPDATE SET
+                 last_indexed_commit = excluded.last_indexed_commit,
+                 last_indexed_at = excluded.last_indexed_at,
+                 file_count = excluded.file_count,
+                 symbol_count = excluded.symbol_count""",
+            (repo_id, commit_sha, now, file_count, symbol_count),
+        )
+        self._db.commit()
 
     def get_codebase_graph_state(self, repo_id: str) -> dict | None:
-        return self.get_code_index_state(repo_id)
+        return self._db.execute_one(
+            "SELECT * FROM codebase_graph_state WHERE repo_id = ?",
+            (repo_id,),
+        )
 
     def update_code_index_state(
         self,

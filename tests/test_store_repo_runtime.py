@@ -108,6 +108,24 @@ def test_codebase_graph_state_round_trip(store):
     assert state["symbol_count"] == 91
 
 
+def test_codebase_graph_state_is_independent_from_host_code_index_state(store):
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_code_index_state("owner-repo", commit_sha="host123", file_count=5, symbol_count=8)
+    store.set_codebase_graph_state("owner-repo", commit_sha="cg456", file_count=17, symbol_count=91)
+
+    host_state = store.get_code_index_state("owner-repo")
+    cg_state = store.get_codebase_graph_state("owner-repo")
+
+    assert host_state is not None
+    assert host_state["last_indexed_commit"] == "host123"
+    assert host_state["file_count"] == 5
+    assert host_state["symbol_count"] == 8
+    assert cg_state is not None
+    assert cg_state["last_indexed_commit"] == "cg456"
+    assert cg_state["file_count"] == 17
+    assert cg_state["symbol_count"] == 91
+
+
 def test_store_migrates_existing_database_schema(tmp_path):
     db_path = tmp_path / "legacy.db"
     conn = sqlite3.connect(db_path)
@@ -160,6 +178,9 @@ def test_store_migrates_existing_database_schema(tmp_path):
     assert repo["last_ready_at"] is None
     assert store._db.execute_one(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'activity_steps'"
+    ) is not None
+    assert store._db.execute_one(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'codebase_graph_state'"
     ) is not None
 
     activity_id = store.add_activity("owner-repo", "setup")

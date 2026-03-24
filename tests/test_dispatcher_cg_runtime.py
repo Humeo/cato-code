@@ -200,3 +200,37 @@ def test_host_index_rebuild_does_not_skip_when_only_cg_state_exists(store):
 
     assert container_mgr.calls
     assert container_mgr.calls[0].startswith("find /repos/owner-repo -type f")
+
+
+def test_host_index_rebuild_does_not_skip_when_stale_definitions_exist_and_only_cg_state_is_current(store):
+    from catocode.dispatcher import _index_repo_from_container
+
+    class HostIndexContainerManager:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def exec(self, command: str, workdir: str = "/repos") -> FakeExecResult:
+            self.calls.append(command)
+            if command.startswith("find "):
+                return FakeExecResult(stdout="")
+            raise AssertionError(f"Unexpected command: {command}")
+
+    store.upsert_code_definition(
+        repo_id="owner-repo",
+        file_path="src/legacy.py",
+        symbol_type="function",
+        symbol_name="legacy_handler",
+        signature="legacy_handler()",
+        body_preview="pass",
+        line_start=1,
+        line_end=2,
+        language="python",
+    )
+    store.update_code_index_state("owner-repo", commit_sha="old456", file_count=1, symbol_count=1)
+    store.set_codebase_graph_state("owner-repo", commit_sha="new789", file_count=12, symbol_count=34)
+    container_mgr = HostIndexContainerManager()
+
+    _index_repo_from_container("owner-repo", container_mgr, store, current_commit="new789")
+
+    assert container_mgr.calls
+    assert container_mgr.calls[0].startswith("find /repos/owner-repo -type f")
