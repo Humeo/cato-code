@@ -19,12 +19,10 @@ def _make_client(tmp_path: Path) -> tuple[TestClient, Store]:
     return TestClient(server.app), store
 
 
-def test_dashboard_html(tmp_path):
+def test_root_path_not_exposed(tmp_path):
     client, _ = _make_client(tmp_path)
     resp = client.get("/")
-    assert resp.status_code == 200
-    assert "CatoCode" in resp.text
-    assert "text/html" in resp.headers["content-type"]
+    assert resp.status_code == 404
 
 
 def test_api_stats_empty(tmp_path):
