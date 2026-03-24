@@ -45,10 +45,11 @@ RUN printf '#!/bin/bash\necho "protocol=https"\necho "host=github.com"\necho "us
 
 # Layer 9: Create non-root user for Claude Code
 RUN useradd -m -s /bin/bash catocode && \
-    mkdir -p /repos /output /app /home/catocode/.catocode /home/catocode/.local/bin && \
+    mkdir -p /repos /output /app /home/catocode/.catocode/repos /home/catocode/.local/bin && \
     chown -R catocode:catocode /repos /output /app /home/catocode/.catocode /home/catocode/.local
 
 # Layer 10: Install Codebase Graph CLI for the non-root user
+# Step 2 expectation: uv tool install --force --python 3.12 /tmp/codebase-graph
 RUN HOME=/home/catocode uv python install 3.12 \
     && HOME=/home/catocode uv tool install --force --python 3.12 /tmp/codebase-graph \
     && chown -R catocode:catocode /home/catocode/.local \

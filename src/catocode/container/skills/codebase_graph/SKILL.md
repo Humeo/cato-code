@@ -75,4 +75,6 @@ Refreshes only changed files. Prefer this after targeted edits or hook-triggered
 - Prefer `--json` when you need precision.
 - If a symbol is ambiguous, resolve it with `--kind`, a qualified name, or `cg file`.
 - If the repo is not indexed, index it before reading structure-heavy code.
+- If `cg index` or `cg update` does not repair the index, stop depending on `cg` and fall back to normal code exploration.
+- `cg` is navigation support, not final proof; verify important claims by reading the underlying code and tests.
 - Keep the index current after editing so later agent passes have useful context.

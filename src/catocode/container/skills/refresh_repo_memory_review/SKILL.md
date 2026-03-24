@@ -17,7 +17,9 @@ Keep repo memory short, stable, and useful for the next session. Update it only 
    - `CLAUDE.md` at the repo root, if present
    - `.claude/CLAUDE.md`, if present
    - `.claude/rules/`, if present
-2. Inspect the merged changes since the last memory update.
+2. Inspect key repo files before deciding update vs skip.
+   - Check the files that define durable behavior, not just the diff
+   - Re-read the merged changes since the last memory update
    - Focus on durable behavior, conventions, commands, and constraints.
    - Ignore transient implementation details and task history.
 3. Decide whether the memory should change.
