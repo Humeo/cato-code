@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 
 import pytest
@@ -57,6 +56,8 @@ def test_activity_step_upsert_and_fetch(store):
         "prepare",
         status="done",
         finished_at="2026-03-24T12:01:00+00:00",
+        reason=None,
+        metadata=None,
     )
 
     step = store.get_activity_step(activity_id, "prepare")
@@ -65,12 +66,29 @@ def test_activity_step_upsert_and_fetch(store):
     assert step["started_at"] == "2026-03-24T12:00:00+00:00"
     assert step["finished_at"] == "2026-03-24T12:01:00+00:00"
     assert step["duration_ms"] is None
-    assert step["reason"] == "starting"
-    assert json.loads(step["metadata"]) == {"phase": "prepare"}
+    assert step["reason"] is None
+    assert step["metadata"] is None
 
     steps = store.list_activity_steps(activity_id)
     assert len(steps) == 1
     assert steps[0]["step_key"] == "prepare"
+
+
+def test_activity_steps_list_chronologically(store):
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    activity_id = store.add_activity("owner-repo", "setup")
+
+    store.upsert_activity_step(activity_id, "cg_index", started_at="2026-03-24T12:03:00+00:00")
+    store.upsert_activity_step(activity_id, "init", started_at="2026-03-24T12:02:00+00:00")
+    store.upsert_activity_step(activity_id, "clone", started_at="2026-03-24T12:01:00+00:00")
+
+    steps = store.list_activity_steps(activity_id)
+    assert [step["step_key"] for step in steps] == ["clone", "init", "cg_index"]
+    assert [step["started_at"] for step in steps] == [
+        "2026-03-24T12:01:00+00:00",
+        "2026-03-24T12:02:00+00:00",
+        "2026-03-24T12:03:00+00:00",
+    ]
 
 
 def test_codebase_graph_state_round_trip(store):

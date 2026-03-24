@@ -223,6 +223,9 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_UNSET = object()
+
+
 class Store:
     def __init__(
         self,
@@ -339,43 +342,59 @@ class Store:
         self,
         activity_id: str,
         step_key: str,
-        status: str | None = None,
-        started_at: str | None = None,
-        finished_at: str | None = None,
-        duration_ms: int | None = None,
-        reason: str | None = None,
-        metadata: dict | None = None,
+        status: object = _UNSET,
+        started_at: object = _UNSET,
+        finished_at: object = _UNSET,
+        duration_ms: object = _UNSET,
+        reason: object = _UNSET,
+        metadata: object = _UNSET,
     ) -> None:
         import json as _json
 
-        metadata_str = _json.dumps(metadata) if metadata is not None else None
+        existing = self.get_activity_step(activity_id, step_key)
+
+        def _resolve(field: str, value: object) -> object | None:
+            if value is _UNSET:
+                return existing[field] if existing is not None else None
+            if field == "metadata" and value is not None and not isinstance(value, str):
+                return _json.dumps(value)
+            return value
+
+        resolved_status = _resolve("status", status)
+        resolved_started_at = _resolve("started_at", started_at)
+        resolved_finished_at = _resolve("finished_at", finished_at)
+        resolved_duration_ms = _resolve("duration_ms", duration_ms)
+        resolved_reason = _resolve("reason", reason)
+        resolved_metadata = _resolve("metadata", metadata)
+
         self._db.execute(
             """INSERT INTO activity_steps
                (activity_id, step_key, status, started_at, finished_at, duration_ms, reason, metadata)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(activity_id, step_key) DO UPDATE SET
-                 status = COALESCE(excluded.status, activity_steps.status),
-                 started_at = COALESCE(excluded.started_at, activity_steps.started_at),
-                 finished_at = COALESCE(excluded.finished_at, activity_steps.finished_at),
-                 duration_ms = COALESCE(excluded.duration_ms, activity_steps.duration_ms),
-                 reason = COALESCE(excluded.reason, activity_steps.reason),
-                 metadata = COALESCE(excluded.metadata, activity_steps.metadata)""",
+                 status = excluded.status,
+                 started_at = excluded.started_at,
+                 finished_at = excluded.finished_at,
+                 duration_ms = excluded.duration_ms,
+                 reason = excluded.reason,
+                 metadata = excluded.metadata""",
             (
                 activity_id,
                 step_key,
-                status,
-                started_at,
-                finished_at,
-                duration_ms,
-                reason,
-                metadata_str,
+                resolved_status,
+                resolved_started_at,
+                resolved_finished_at,
+                resolved_duration_ms,
+                resolved_reason,
+                resolved_metadata,
             ),
         )
         self._db.commit()
 
     def list_activity_steps(self, activity_id: str) -> list[dict]:
         return self._db.execute(
-            "SELECT * FROM activity_steps WHERE activity_id = ? ORDER BY step_key",
+            "SELECT * FROM activity_steps WHERE activity_id = ? "
+            "ORDER BY COALESCE(started_at, finished_at), step_key",
             (activity_id,),
         )
 
