@@ -36,6 +36,10 @@ SETUP_WAIT_POLL_SECS = 1
 
 SETUP_STEP_KEYS = ("clone", "init_claude_md", "cg_index", "health_check")
 REPO_MEMORY_DECISION_RE = re.compile(r"REPO_MEMORY_DECISION:\s*(update_claude_md|skip_update)")
+INVALID_REPO_MEMORY_DECISION_SUMMARY = "Error: refresh review missing valid final decision marker"
+
+# Backward-compatible alias kept for tests and older call sites.
+prepare_issue_codebase_graph_runtime = prepare_codebase_graph_runtime
 
 
 def _now_iso() -> str:
@@ -375,6 +379,9 @@ async def dispatch(
         logs = store.get_logs(activity_id)
         summary = _extract_summary(logs)
         repo_memory_decision = _extract_repo_memory_decision(_extract_result_text(logs))
+        if refresh_step_started_at is not None and exit_code == 0 and repo_memory_decision is None:
+            exit_code = 1
+            summary = INVALID_REPO_MEMORY_DECISION_SUMMARY
 
         # 10. Update final status and session_id for future resume
         if exit_code == 0:
@@ -1028,7 +1035,10 @@ def _extract_result_text(logs: list) -> str:
 
 
 def _extract_repo_memory_decision(result_text: str) -> str | None:
-    match = REPO_MEMORY_DECISION_RE.search(result_text)
+    lines = [line.strip() for line in result_text.splitlines() if line.strip()]
+    if not lines:
+        return None
+    match = REPO_MEMORY_DECISION_RE.fullmatch(lines[-1])
     if match is None:
         return None
     return match.group(1)

@@ -91,6 +91,7 @@ def test_build_refresh_repo_memory_review_prompt_includes_merge_context():
     )
 
     assert "PR #42" in prompt
+    assert "Ship new workflow" in prompt
     assert "abc123" in prompt
     assert "/repos/owner-repo" in prompt
 
@@ -213,6 +214,54 @@ async def test_refresh_repo_memory_review_records_update_claude_md_step(store, m
     steps = store.list_activity_steps(activity_id)
     assert [step["step_key"] for step in steps] == ["review_repo_memory", "update_claude_md"]
     assert all(step["status"] == "done" for step in steps)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result_text",
+    [
+        "Reviewed repo memory without a final marker",
+        "Reviewed repo memory\nREPO_MEMORY_DECISION: skip_update\nTrailing explanation",
+    ],
+)
+async def test_refresh_repo_memory_review_requires_valid_final_decision_line(store, monkeypatch, result_text):
+    from catocode.dispatcher import dispatch
+
+    repo_id, activity_id = _seed_ready_repo(store)
+    container_mgr = ReadyRefreshContainerManager()
+
+    monkeypatch.setattr("catocode.dispatcher._build_prompt", AsyncMock(return_value="refresh prompt"))
+    monkeypatch.setattr("catocode.dispatcher._index_repo_from_container", lambda *args, **kwargs: None)
+
+    async def fake_execute_sdk_runner(**kwargs):
+        store.add_log(
+            kwargs["activity_id"],
+            json.dumps({"type": "result", "result": result_text}),
+        )
+        return 0, "session-invalid", 0.2
+
+    monkeypatch.setattr("catocode.dispatcher._execute_sdk_runner", fake_execute_sdk_runner)
+
+    await dispatch(
+        activity_id=activity_id,
+        store=store,
+        container_mgr=container_mgr,
+        anthropic_api_key="sk-ant",
+        github_token="ghp-token",
+        verbose=False,
+    )
+
+    activity = store.get_activity(activity_id)
+    review_step = store.get_activity_step(activity_id, "review_repo_memory")
+
+    assert activity is not None
+    assert activity["status"] == "failed"
+    assert activity["summary"] == "Error: refresh review missing valid final decision marker"
+    assert review_step is not None
+    assert review_step["status"] == "failed"
+    assert review_step["reason"] == "Error: refresh review missing valid final decision marker"
+    assert store.get_activity_step(activity_id, "skip_update") is None
+    assert store.get_activity_step(activity_id, "update_claude_md") is None
 
 
 @pytest.mark.asyncio
