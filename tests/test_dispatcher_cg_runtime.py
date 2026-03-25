@@ -42,8 +42,8 @@ def store(tmp_path):
     return store
 
 
-def test_prepare_issue_codebase_graph_runtime_persists_healthy_stats(store):
-    from catocode.codebase_graph_runtime import prepare_issue_codebase_graph_runtime
+def test_prepare_codebase_graph_runtime_persists_healthy_stats(store):
+    from catocode.codebase_graph_runtime import prepare_codebase_graph_runtime
 
     store.set_codebase_graph_state("owner-repo", commit_sha="abc123", file_count=1, symbol_count=2)
     container_mgr = ScriptedContainerManager(
@@ -53,7 +53,7 @@ def test_prepare_issue_codebase_graph_runtime_persists_healthy_stats(store):
         ]
     )
 
-    prepare_issue_codebase_graph_runtime("owner-repo", container_mgr, store)
+    prepare_codebase_graph_runtime("owner-repo", container_mgr, store)
 
     assert container_mgr.calls == [
         ("git rev-parse HEAD", "/repos/owner-repo"),
@@ -67,8 +67,8 @@ def test_prepare_issue_codebase_graph_runtime_persists_healthy_stats(store):
     assert state["last_indexed_at"] is not None
 
 
-def test_prepare_issue_codebase_graph_runtime_repairs_stale_state_with_update(store):
-    from catocode.codebase_graph_runtime import prepare_issue_codebase_graph_runtime
+def test_prepare_codebase_graph_runtime_repairs_stale_state_with_update(store):
+    from catocode.codebase_graph_runtime import prepare_codebase_graph_runtime
 
     store.set_codebase_graph_state("owner-repo", commit_sha="old456", file_count=4, symbol_count=9)
     container_mgr = ScriptedContainerManager(
@@ -81,7 +81,7 @@ def test_prepare_issue_codebase_graph_runtime_repairs_stale_state_with_update(st
         ]
     )
 
-    prepare_issue_codebase_graph_runtime("owner-repo", container_mgr, store)
+    prepare_codebase_graph_runtime("owner-repo", container_mgr, store)
 
     assert container_mgr.calls == [
         ("git rev-parse HEAD", "/repos/owner-repo"),
@@ -97,8 +97,8 @@ def test_prepare_issue_codebase_graph_runtime_repairs_stale_state_with_update(st
     assert state["symbol_count"] == 75
 
 
-def test_prepare_issue_codebase_graph_runtime_falls_back_to_full_index_when_diff_has_deletions(store):
-    from catocode.codebase_graph_runtime import prepare_issue_codebase_graph_runtime
+def test_prepare_codebase_graph_runtime_falls_back_to_full_index_when_diff_has_deletions(store):
+    from catocode.codebase_graph_runtime import prepare_codebase_graph_runtime
 
     store.set_codebase_graph_state("owner-repo", commit_sha="old456", file_count=4, symbol_count=9)
     container_mgr = ScriptedContainerManager(
@@ -111,7 +111,7 @@ def test_prepare_issue_codebase_graph_runtime_falls_back_to_full_index_when_diff
         ]
     )
 
-    prepare_issue_codebase_graph_runtime("owner-repo", container_mgr, store)
+    prepare_codebase_graph_runtime("owner-repo", container_mgr, store)
 
     assert container_mgr.calls == [
         ("git rev-parse HEAD", "/repos/owner-repo"),
@@ -127,8 +127,8 @@ def test_prepare_issue_codebase_graph_runtime_falls_back_to_full_index_when_diff
     assert state["symbol_count"] == 70
 
 
-def test_prepare_issue_codebase_graph_runtime_falls_back_to_full_index_when_diff_unavailable(store):
-    from catocode.codebase_graph_runtime import prepare_issue_codebase_graph_runtime
+def test_prepare_codebase_graph_runtime_falls_back_to_full_index_when_diff_unavailable(store):
+    from catocode.codebase_graph_runtime import prepare_codebase_graph_runtime
 
     store.set_codebase_graph_state("owner-repo", commit_sha="old456", file_count=4, symbol_count=9)
     container_mgr = ScriptedContainerManager(
@@ -141,7 +141,7 @@ def test_prepare_issue_codebase_graph_runtime_falls_back_to_full_index_when_diff
         ]
     )
 
-    prepare_issue_codebase_graph_runtime("owner-repo", container_mgr, store)
+    prepare_codebase_graph_runtime("owner-repo", container_mgr, store)
 
     assert container_mgr.calls == [
         ("git rev-parse HEAD", "/repos/owner-repo"),
@@ -157,8 +157,8 @@ def test_prepare_issue_codebase_graph_runtime_falls_back_to_full_index_when_diff
     assert state["symbol_count"] == 101
 
 
-def test_prepare_issue_codebase_graph_runtime_is_best_effort_when_repair_fails(store):
-    from catocode.codebase_graph_runtime import prepare_issue_codebase_graph_runtime
+def test_prepare_codebase_graph_runtime_is_best_effort_when_repair_fails(store):
+    from catocode.codebase_graph_runtime import prepare_codebase_graph_runtime
 
     container_mgr = ScriptedContainerManager(
         [
@@ -169,7 +169,7 @@ def test_prepare_issue_codebase_graph_runtime_is_best_effort_when_repair_fails(s
         ]
     )
 
-    prepare_issue_codebase_graph_runtime("owner-repo", container_mgr, store)
+    prepare_codebase_graph_runtime("owner-repo", container_mgr, store)
 
     assert container_mgr.calls == [
         ("git rev-parse HEAD", "/repos/owner-repo"),

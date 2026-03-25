@@ -79,7 +79,7 @@ def _repair_codebase_graph(
     return container_mgr.exec("cg index .", workdir=repo_workdir)
 
 
-def prepare_issue_codebase_graph_runtime(
+def prepare_codebase_graph_runtime(
     repo_id: str,
     container_mgr: "ContainerManager",
     store: "Store",
@@ -137,3 +137,12 @@ def prepare_issue_codebase_graph_runtime(
         file_count=repaired_counts[0],
         symbol_count=repaired_counts[1],
     )
+
+
+def prepare_issue_codebase_graph_runtime(
+    repo_id: str,
+    container_mgr: "ContainerManager",
+    store: "Store",
+    repo_workdir: str | None = None,
+) -> None:
+    prepare_codebase_graph_runtime(repo_id, container_mgr, store, repo_workdir=repo_workdir)

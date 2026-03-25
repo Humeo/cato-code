@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from .codebase_graph_runtime import prepare_issue_codebase_graph_runtime
+from .codebase_graph_runtime import prepare_codebase_graph_runtime
 from .config import parse_repo_url
 from .github.commenter import failure_comment, post_issue_comment
 from .github.issue_fetcher import fetch_issue
@@ -33,6 +34,7 @@ RETRY_DELAY_SECS = 30     # Delay between retries
 SETUP_WAIT_POLL_SECS = 1
 
 SETUP_STEP_KEYS = ("clone", "init_claude_md", "cg_index", "health_check")
+REPO_MEMORY_DECISION_RE = re.compile(r"REPO_MEMORY_DECISION:\s*(update_claude_md|skip_update)")
 
 
 def _now_iso() -> str:
@@ -328,14 +330,18 @@ async def dispatch(
         if activity["kind"] == "respond_review":
             resume_session_id = _find_original_session_id(activity, store)
 
+        refresh_step_started_at: str | None = None
+        if activity["kind"] == "refresh_repo_memory_review":
+            refresh_step_started_at = _start_activity_step(store, activity_id, "review_repo_memory")
+
         # 8. Execute SDK runner with retries on transient failure
         exit_code = 1
         session_id = None
         cost_usd = None
         for attempt in range(1, MAX_RETRIES + 1):
-            if activity["kind"] in ("fix_issue", "analyze_issue"):
+            if activity["kind"] in ("fix_issue", "analyze_issue", "refresh_repo_memory_review"):
                 try:
-                    prepare_issue_codebase_graph_runtime(repo_id, container_mgr, store, repo_workdir=f"/repos/{repo_id}")
+                    prepare_codebase_graph_runtime(repo_id, container_mgr, store, repo_workdir=f"/repos/{repo_id}")
                 except Exception as e:
                     logger.debug("Codebase graph runtime prep skipped: %s", e)
             exit_code, session_id, cost_usd = await _execute_sdk_runner(
@@ -366,9 +372,15 @@ async def dispatch(
 
         # 9. Extract summary from result line
         summary = _extract_summary(store.get_logs(activity_id))
+        repo_memory_decision = _extract_repo_memory_decision(summary)
 
         # 10. Update final status and session_id for future resume
         if exit_code == 0:
+            if refresh_step_started_at is not None:
+                _finish_activity_step(store, activity_id, "review_repo_memory", refresh_step_started_at, "done")
+                if repo_memory_decision is not None:
+                    decision_started_at = _start_activity_step(store, activity_id, repo_memory_decision)
+                    _finish_activity_step(store, activity_id, repo_memory_decision, decision_started_at, "done")
             store.update_activity(
                 activity_id,
                 status="done",
@@ -378,6 +390,15 @@ async def dispatch(
             )
             logger.info("Activity %s completed (cost=$%.4f)", activity_id, cost_usd or 0)
         else:
+            if refresh_step_started_at is not None:
+                _finish_activity_step(
+                    store,
+                    activity_id,
+                    "review_repo_memory",
+                    refresh_step_started_at,
+                    "failed",
+                    reason=summary,
+                )
             store.update_activity(
                 activity_id,
                 status="failed",
@@ -938,6 +959,13 @@ def _extract_summary(logs: list) -> str:
     # Fallback: last few lines as plain text
     last_lines = [log["line"] for log in logs[-5:]]
     return "\n".join(last_lines)[:500]
+
+
+def _extract_repo_memory_decision(summary: str) -> str | None:
+    match = REPO_MEMORY_DECISION_RE.search(summary)
+    if match is None:
+        return None
+    return match.group(1)
 
 
 def _slugify(text: str) -> str:
