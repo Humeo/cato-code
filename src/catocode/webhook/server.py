@@ -145,6 +145,7 @@ class WebhookServer:
             delivery_id=x_github_delivery,
             repo_id=repo_id,
         )
+        self._mark_closed_pr_runtime_sessions(x_github_event, repo_id, payload)
         repo_memory_refresh_status = self._queue_merged_pr_repo_memory_refresh(
             x_github_event, repo_id, payload
         )
@@ -359,6 +360,7 @@ class WebhookServer:
             return JSONResponse({"status": "ignored", "event_type": x_github_event})
 
         event = parse_webhook(x_github_event, payload, x_github_delivery, repo_id)
+        self._mark_closed_pr_runtime_sessions(x_github_event, repo_id, payload)
         repo_memory_refresh_status = self._queue_merged_pr_repo_memory_refresh(
             x_github_event, repo_id, payload
         )
@@ -435,6 +437,24 @@ class WebhookServer:
         self._attach_runtime_session(activity_id)
         logger.info("Queued repo memory refresh for merged PR #%s in %s", pr_number, repo_id)
         return "queued_repo_memory_refresh"
+
+    def _mark_closed_pr_runtime_sessions(
+        self,
+        event_name: str,
+        repo_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        if event_name != "pull_request":
+            return
+        if payload.get("action") != "closed":
+            return
+        pull_request = payload.get("pull_request")
+        if not isinstance(pull_request, dict):
+            return
+        pr_number = pull_request.get("number")
+        if pr_number is None:
+            return
+        self._store.mark_runtime_sessions_for_pr_closed(repo_id, int(pr_number))
 
     def _attach_runtime_session(self, activity_id: str) -> None:
         activity = self._store.get_activity(activity_id)

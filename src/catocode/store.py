@@ -203,6 +203,7 @@ CREATE TABLE IF NOT EXISTS runtime_sessions (
     gc_eligible_at TEXT,
     gc_delete_after TEXT,
     gc_status TEXT,
+    gc_error TEXT,
     FOREIGN KEY (repo_id) REFERENCES repos(id)
 );
 
@@ -218,6 +219,7 @@ CREATE TABLE IF NOT EXISTS runtime_session_pr_links (
     session_id TEXT PRIMARY KEY,
     repo_id TEXT NOT NULL,
     pr_number INTEGER NOT NULL,
+    pr_state TEXT NOT NULL DEFAULT 'open',
     created_at TEXT NOT NULL,
     FOREIGN KEY (session_id) REFERENCES runtime_sessions(id)
 );
@@ -282,6 +284,7 @@ WHERE kind = 'refresh_repo_memory_review' AND status IN ('pending', 'running')""
     gc_eligible_at TEXT,
     gc_delete_after TEXT,
     gc_status TEXT,
+    gc_error TEXT,
     FOREIGN KEY (repo_id) REFERENCES repos(id)
 )""",
     """CREATE TABLE IF NOT EXISTS runtime_session_issue_links (
@@ -295,12 +298,15 @@ WHERE kind = 'refresh_repo_memory_review' AND status IN ('pending', 'running')""
     session_id TEXT PRIMARY KEY,
     repo_id TEXT NOT NULL,
     pr_number INTEGER NOT NULL,
+    pr_state TEXT NOT NULL DEFAULT 'open',
     created_at TEXT NOT NULL,
     FOREIGN KEY (session_id) REFERENCES runtime_sessions(id)
 )""",
     "CREATE INDEX IF NOT EXISTS idx_runtime_sessions_repo_status ON runtime_sessions(repo_id, status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_runtime_session_issue_repo_issue ON runtime_session_issue_links(repo_id, issue_number, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_runtime_session_pr_repo_pr ON runtime_session_pr_links(repo_id, pr_number, created_at)",
+    "ALTER TABLE runtime_sessions ADD COLUMN gc_error TEXT",
+    "ALTER TABLE runtime_session_pr_links ADD COLUMN pr_state TEXT NOT NULL DEFAULT 'open'",
 ]
 
 
@@ -663,6 +669,7 @@ class Store:
         branch_name: str,
         issue_number: int | None = None,
         pr_number: int | None = None,
+        pr_state: str = "open",
         sdk_session_id: str | None = None,
         fork_from_session_id: str | None = None,
     ) -> str:
@@ -672,8 +679,8 @@ class Store:
             """INSERT INTO runtime_sessions (
                    id, repo_id, sdk_session_id, entry_kind, status, worktree_path,
                    branch_name, fork_from_session_id, created_at, updated_at,
-                   last_activity_at, terminal_at, gc_eligible_at, gc_delete_after, gc_status
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)""",
+                   last_activity_at, terminal_at, gc_eligible_at, gc_delete_after, gc_status, gc_error
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL)""",
             (
                 session_id,
                 repo_id,
@@ -696,9 +703,9 @@ class Store:
             )
         if pr_number is not None:
             self._db.execute(
-                """INSERT INTO runtime_session_pr_links (session_id, repo_id, pr_number, created_at)
-                   VALUES (?, ?, ?, ?)""",
-                (session_id, repo_id, pr_number, now),
+                """INSERT INTO runtime_session_pr_links (session_id, repo_id, pr_number, pr_state, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (session_id, repo_id, pr_number, pr_state, now),
             )
         self._db.commit()
         return session_id
@@ -752,16 +759,53 @@ class Store:
         )
         if existing is None:
             self._db.execute(
-                """INSERT INTO runtime_session_pr_links (session_id, repo_id, pr_number, created_at)
-                   VALUES (?, ?, ?, ?)""",
+                """INSERT INTO runtime_session_pr_links (session_id, repo_id, pr_number, pr_state, created_at)
+                   VALUES (?, ?, ?, 'open', ?)""",
                 (session_id, session["repo_id"], pr_number, _now()),
             )
         else:
             self._db.execute(
-                "UPDATE runtime_session_pr_links SET pr_number = ? WHERE session_id = ?",
+                "UPDATE runtime_session_pr_links SET pr_number = ?, pr_state = 'open' WHERE session_id = ?",
                 (pr_number, session_id),
             )
         self._db.commit()
+
+    def get_runtime_session_pr_link(self, session_id: str) -> dict | None:
+        return self._db.execute_one(
+            "SELECT * FROM runtime_session_pr_links WHERE session_id = ?",
+            (session_id,),
+        )
+
+    def mark_runtime_sessions_for_pr_closed(self, repo_id: str, pr_number: int) -> None:
+        self._db.execute(
+            """UPDATE runtime_session_pr_links
+               SET pr_state = 'closed'
+               WHERE repo_id = ? AND pr_number = ?""",
+            (repo_id, pr_number),
+        )
+        self._db.commit()
+
+    def has_inflight_runtime_session_activity(self, session_id: str) -> bool:
+        row = self._db.execute_one(
+            """SELECT 1 AS found
+               FROM activities
+               WHERE session_id = ?
+                 AND status IN ('pending', 'running')
+               LIMIT 1""",
+            (session_id,),
+        )
+        return bool(row)
+
+    def list_runtime_sessions_ready_for_gc(self, as_of: str) -> list[dict]:
+        return self._db.execute(
+            """SELECT *
+               FROM runtime_sessions
+               WHERE gc_status = 'pending'
+                 AND gc_delete_after IS NOT NULL
+                 AND gc_delete_after <= ?
+               ORDER BY gc_delete_after, created_at""",
+            (as_of,),
+        )
 
     def update_runtime_session(self, session_id: str, **fields: object) -> None:
         if not fields:
@@ -780,6 +824,8 @@ class Store:
         terminal_at: str,
         gc_eligible_at: str | None,
         gc_delete_after: str | None,
+        gc_status: str | None = None,
+        gc_error: str | None = None,
     ) -> None:
         self.update_runtime_session(
             session_id,
@@ -787,7 +833,8 @@ class Store:
             terminal_at=terminal_at,
             gc_eligible_at=gc_eligible_at,
             gc_delete_after=gc_delete_after,
-            gc_status="pending" if gc_eligible_at and gc_delete_after else None,
+            gc_status=gc_status if gc_status is not None else ("pending" if gc_eligible_at and gc_delete_after else None),
+            gc_error=gc_error,
             last_activity_at=terminal_at,
         )
 

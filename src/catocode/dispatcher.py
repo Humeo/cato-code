@@ -13,9 +13,11 @@ from .github.commenter import failure_comment, post_issue_comment
 from .github.issue_fetcher import fetch_issue
 from .runtime_envelope import ActivityEnvelope, ActivityResultEnvelope, InvalidActivityResultEnvelope
 from .session_runtime import (
+    finalize_runtime_session,
     issue_number_from_trigger,
     pr_number_from_trigger,
     resolve_runtime_session_for_activity,
+    should_auto_terminal_session,
 )
 from .skill_renderer import (
     build_analyze_issue_prompt,
@@ -490,6 +492,12 @@ async def dispatch(
                 session_id=activity_session_ref,
                 cost_usd=cost_usd,
             )
+            if runtime_session is not None and should_auto_terminal_session(activity["kind"]):
+                finalize_runtime_session(
+                    store,
+                    runtime_session["id"],
+                    status="done",
+                )
             logger.info("Activity %s completed (cost=$%.4f)", activity_id, cost_usd or 0)
         else:
             if refresh_step_started_at is not None:
@@ -508,6 +516,12 @@ async def dispatch(
                 session_id=activity_session_ref,
                 cost_usd=cost_usd,
             )
+            if runtime_session is not None and should_auto_terminal_session(activity["kind"]):
+                finalize_runtime_session(
+                    store,
+                    runtime_session["id"],
+                    status="failed",
+                )
             logger.warning("Activity %s failed after %d attempts", activity_id[:8], MAX_RETRIES)
             await _notify_failure(activity, repo, github_token, summary)
 
@@ -515,6 +529,8 @@ async def dispatch(
         summary = "Timeout: activity exceeded time limit"
         _fail_refresh_review_step(store, activity_id, refresh_step_started_at, summary)
         store.update_activity(activity_id, status="failed", summary=summary)
+        if runtime_session is not None and should_auto_terminal_session(activity["kind"]):
+            finalize_runtime_session(store, runtime_session["id"], status="failed")
         if activity["kind"] == "setup":
             store.update_repo_lifecycle(
                 repo_id,
@@ -529,6 +545,8 @@ async def dispatch(
         summary = f"Error: {e}"
         _fail_refresh_review_step(store, activity_id, refresh_step_started_at, summary)
         store.update_activity(activity_id, status="failed", summary=summary)
+        if runtime_session is not None and should_auto_terminal_session(activity["kind"]):
+            finalize_runtime_session(store, runtime_session["id"], status="failed")
         if activity["kind"] == "setup":
             store.update_repo_lifecycle(
                 repo_id,
