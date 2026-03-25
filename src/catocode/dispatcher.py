@@ -15,6 +15,7 @@ from .skill_renderer import (
     build_analyze_issue_prompt,
     build_fix_issue_prompt,
     build_patrol_prompt,
+    build_refresh_repo_memory_review_prompt,
     build_respond_review_prompt,
     build_review_pr_prompt,
     build_triage_prompt,
@@ -371,8 +372,9 @@ async def dispatch(
                 )
 
         # 9. Extract summary from result line
-        summary = _extract_summary(store.get_logs(activity_id))
-        repo_memory_decision = _extract_repo_memory_decision(summary)
+        logs = store.get_logs(activity_id)
+        summary = _extract_summary(logs)
+        repo_memory_decision = _extract_repo_memory_decision(_extract_result_text(logs))
 
         # 10. Update final status and session_id for future resume
         if exit_code == 0:
@@ -845,6 +847,28 @@ Labels: {', '.join(issue.labels) if issue.labels else 'None'}
             pr_data=pr_data,
         )
 
+    elif kind == "refresh_repo_memory_review":
+        raw_metadata = activity.get("metadata")
+        metadata: dict = {}
+        if raw_metadata:
+            try:
+                metadata = json.loads(raw_metadata)
+            except (TypeError, json.JSONDecodeError):
+                metadata = {}
+
+        pr_number = metadata.get("pr_number")
+        merge_commit_sha = metadata.get("merge_commit_sha")
+        pr_title = metadata.get("title") or metadata.get("pr_title") or ""
+        if pr_number is None or not merge_commit_sha:
+            raise ValueError("refresh_repo_memory_review activity missing required metadata")
+
+        return build_refresh_repo_memory_review_prompt(
+            repo_id=repo.get("id", f"{owner}-{repo_name}"),
+            pr_number=str(pr_number),
+            pr_title=str(pr_title),
+            merge_commit_sha=str(merge_commit_sha),
+        )
+
     else:
         raise ValueError(f"Unknown activity kind: {kind!r}")
 
@@ -984,8 +1008,27 @@ def _extract_summary(logs: list) -> str:
     return "\n".join(last_lines)[:500]
 
 
-def _extract_repo_memory_decision(summary: str) -> str | None:
-    match = REPO_MEMORY_DECISION_RE.search(summary)
+def _extract_result_text(logs: list) -> str:
+    """Extract the full result text from the latest result log line."""
+    if not logs:
+        return ""
+
+    for log in reversed(logs):
+        line = log["line"]
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, KeyError):
+            continue
+        if obj.get("type") != "result":
+            continue
+        result_text = obj.get("result")
+        if isinstance(result_text, str):
+            return result_text
+    return ""
+
+
+def _extract_repo_memory_decision(result_text: str) -> str | None:
+    match = REPO_MEMORY_DECISION_RE.search(result_text)
     if match is None:
         return None
     return match.group(1)

@@ -30,6 +30,10 @@ Keep repo memory short, stable, and useful for the next session. Update it only 
    - Remove repetition and avoid long explanations.
 5. Move narrow rules into `.claude/rules/<topic>.md` when they are useful but too specific for the main memory file.
 6. If you update memory, reread the result and tighten the wording again.
+7. End your final response with exactly one machine-readable decision line on its own last line.
+   - `REPO_MEMORY_DECISION: update_claude_md`
+   - `REPO_MEMORY_DECISION: skip_update`
+   - Do not add any text after that final line.
 
 ## What belongs in `CLAUDE.md`
 

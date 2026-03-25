@@ -80,6 +80,69 @@ def _seed_ready_repo(store: Store) -> tuple[str, str]:
     return repo_id, activity_id
 
 
+def test_build_refresh_repo_memory_review_prompt_includes_merge_context():
+    from catocode.skill_renderer import build_refresh_repo_memory_review_prompt
+
+    prompt = build_refresh_repo_memory_review_prompt(
+        repo_id="owner-repo",
+        pr_number="42",
+        pr_title="Ship new workflow",
+        merge_commit_sha="abc123",
+    )
+
+    assert "PR #42" in prompt
+    assert "abc123" in prompt
+    assert "/repos/owner-repo" in prompt
+
+
+@pytest.mark.asyncio
+async def test_build_prompt_uses_refresh_activity_metadata(store, monkeypatch):
+    from catocode.dispatcher import _build_prompt
+
+    repo_id, activity_id = _seed_ready_repo(store)
+    activity = store.get_activity(activity_id)
+    repo = store.get_repo(repo_id)
+
+    assert activity is not None
+    assert repo is not None
+
+    captured: dict[str, str] = {}
+
+    def fake_build_refresh_repo_memory_review_prompt(
+        repo_id: str,
+        pr_number: str,
+        pr_title: str,
+        merge_commit_sha: str,
+        skill_name: str = "refresh_repo_memory_review",
+    ) -> str:
+        captured.update(
+            {
+                "repo_id": repo_id,
+                "pr_number": pr_number,
+                "pr_title": pr_title,
+                "merge_commit_sha": merge_commit_sha,
+                "skill_name": skill_name,
+            }
+        )
+        return "refresh prompt"
+
+    monkeypatch.setattr(
+        "catocode.dispatcher.build_refresh_repo_memory_review_prompt",
+        fake_build_refresh_repo_memory_review_prompt,
+    )
+
+    prompt = await _build_prompt(activity, repo, github_token="ghp-token", store=store)
+
+    assert prompt == "refresh prompt"
+    assert captured == {
+        "repo_id": "owner-repo",
+        "pr_number": "42",
+        "pr_title": "Ship new workflow",
+        "merge_commit_sha": "abc123",
+        "skill_name": "refresh_repo_memory_review",
+    }
+
+
 @pytest.mark.asyncio
 async def test_refresh_repo_memory_review_prepares_cg_before_runner(store, monkeypatch):
     from catocode.dispatcher import dispatch
@@ -95,7 +158,7 @@ async def test_refresh_repo_memory_review_prepares_cg_before_runner(store, monke
         container_mgr.runner_calls.append(kwargs["prompt"])
         store.add_log(
             kwargs["activity_id"],
-            json.dumps({"type": "result", "result": "Reviewed repo memory\nREPO_MEMORY_DECISION: skip_update"}),
+            json.dumps({"type": "result", "result": f"{'x' * 600}\nREPO_MEMORY_DECISION: skip_update"}),
         )
         return 0, "session-123", 0.25
 
@@ -132,7 +195,7 @@ async def test_refresh_repo_memory_review_records_update_claude_md_step(store, m
     async def fake_execute_sdk_runner(**kwargs):
         store.add_log(
             kwargs["activity_id"],
-            json.dumps({"type": "result", "result": "Reviewed repo memory\nREPO_MEMORY_DECISION: update_claude_md"}),
+            json.dumps({"type": "result", "result": f"{'x' * 600}\nREPO_MEMORY_DECISION: update_claude_md"}),
         )
         return 0, "session-456", 0.5
 

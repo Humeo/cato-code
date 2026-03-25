@@ -243,6 +243,56 @@ Begin now.
     return prompt
 
 
+def build_refresh_repo_memory_review_prompt(
+    repo_id: str,
+    pr_number: str,
+    pr_title: str,
+    merge_commit_sha: str,
+    skill_name: str = "refresh_repo_memory_review",
+) -> str:
+    """Build a prompt for reviewing whether repo memory needs an update after a merge."""
+    skill_template = read_skill(skill_name)
+
+    context = {
+        "repo_id": repo_id,
+        "pr_number": pr_number,
+        "pr_title": pr_title,
+        "merge_commit_sha": merge_commit_sha,
+    }
+
+    skill_content = render_skill_prompt(skill_template, context)
+
+    prompt = f"""{skill_content}
+
+---
+
+## Current Task
+
+You are reviewing repo memory after PR #{pr_number} merged in repository {repo_id}.
+
+### Merge Context
+
+- Repository path: `/repos/{repo_id}`
+- PR number: #{pr_number}
+- PR title: {pr_title}
+- Merge commit SHA: `{merge_commit_sha}`
+
+### Instructions
+
+Follow the review workflow in this skill. Base your review on the current repo state plus the merged PR context above.
+
+Your final line must be exactly one of:
+- `REPO_MEMORY_DECISION: update_claude_md`
+- `REPO_MEMORY_DECISION: skip_update`
+
+Place that decision marker on its own final line so it can be parsed reliably.
+
+Begin now.
+"""
+
+    return prompt
+
+
 def build_triage_prompt(
     issue_number: str,
     repo_id: str,
