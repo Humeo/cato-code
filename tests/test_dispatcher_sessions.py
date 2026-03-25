@@ -28,6 +28,7 @@ class SessionAwareContainerManager:
         self.worktree_path = worktree_path
         self.exec_calls: list[tuple[str, str]] = []
         self.ensure_session_worktree_calls: list[tuple[str, str, str]] = []
+        self.reset_checkout_calls: list[tuple[str, str | None]] = []
 
     def ensure_running(
         self,
@@ -44,8 +45,9 @@ class SessionAwareContainerManager:
         self.ensure_session_worktree_calls.append((repo_id, repo_url, session_id))
         return self.worktree_path
 
-    def reset_checkout(self, workdir: str) -> None:
+    def reset_checkout(self, workdir: str, target_ref: str | None = None) -> None:
         assert workdir == self.worktree_path
+        self.reset_checkout_calls.append((workdir, target_ref))
 
     def exec(self, command: str, workdir: str = "/repos") -> FakeExecResult:
         self.exec_calls.append((command, workdir))
@@ -85,15 +87,13 @@ async def test_dispatch_fix_issue_uses_runtime_session_worktree_and_persists_sdk
         issue_number=42,
         sdk_session_id="sdk-old",
     )
-    store.update_runtime_session(
+    store.replace_runtime_session_resolution(
         runtime_session_id,
-        resolution_state=json.dumps(
-            {
-                "hypotheses": [{"id": "h1", "summary": "Validate empty token input", "status": "active"}],
-                "todos": [{"id": "t1", "content": "Reproduce with empty input", "status": "done"}],
-                "checkpoints": [{"id": "c1", "label": "before-fix", "status": "done"}],
-            }
-        ),
+        {
+            "hypotheses": [{"id": "h1", "summary": "Validate empty token input", "status": "active"}],
+            "todos": [{"id": "t1", "content": "Reproduce with empty input", "status": "done"}],
+            "checkpoints": [{"id": "c1", "label": "before-fix", "status": "done"}],
+        },
     )
     activity_id = store.add_activity("owner-repo", "fix_issue", "issue:42")
     store.update_activity(activity_id, session_id=runtime_session_id)
@@ -165,9 +165,18 @@ async def test_dispatch_fix_issue_uses_runtime_session_worktree_and_persists_sdk
     assert runtime_session["sdk_session_id"] == "sdk-new"
     assert runtime_session["last_activity_at"] is not None
     assert '"confirmed"' in runtime_session["resolution_state"]
+    assert store.list_runtime_session_hypotheses(runtime_session_id) == [
+        {"id": "h1", "summary": "Validate empty token input", "status": "confirmed"}
+    ]
+    assert store.list_runtime_session_checkpoints(runtime_session_id) == [
+        {"id": "c2", "label": "verified-fix", "status": "done", "commit_sha": "abc123"}
+    ]
 
     assert container_mgr.ensure_session_worktree_calls == [
         ("owner-repo", "https://github.com/owner/repo", runtime_session_id)
+    ]
+    assert container_mgr.reset_checkout_calls == [
+        ("/repos/.worktrees/owner-repo/runtime-session-1", None)
     ]
     assert cg_workdirs == ["/repos/.worktrees/owner-repo/runtime-session-1"]
 
@@ -212,3 +221,113 @@ async def test_dispatch_fix_issue_creates_runtime_session_when_activity_missing_
     assert runtime_session["repo_id"] == "owner-repo"
     assert runtime_session["entry_kind"] == "fix_issue"
     assert runtime_session["sdk_session_id"] == "sdk-generated"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_failed_fix_issue_marks_session_needs_recovery(monkeypatch, tmp_path):
+    from catocode.dispatcher import dispatch
+
+    store = Store(db_path=tmp_path / "test.db")
+    _seed_ready_repo(store)
+    runtime_session_id = store.create_runtime_session(
+        repo_id="owner-repo",
+        entry_kind="fix_issue",
+        status="active",
+        worktree_path="/repos/.worktrees/owner-repo/runtime-session-fail",
+        branch_name="catocode/session/runtime-session-fail",
+        issue_number=42,
+        sdk_session_id="sdk-old",
+    )
+    store.replace_runtime_session_resolution(
+        runtime_session_id,
+        {
+            "hypotheses": [{"id": "h1", "summary": "Handle malformed input", "status": "active"}],
+            "todos": [],
+            "checkpoints": [{"id": "c1", "label": "before-fix", "status": "done", "commit_sha": "abc123"}],
+        },
+    )
+    activity_id = store.add_activity("owner-repo", "fix_issue", "issue:42")
+    store.update_activity(activity_id, session_id=runtime_session_id)
+    container_mgr = SessionAwareContainerManager("/repos/.worktrees/owner-repo/runtime-session-fail")
+
+    monkeypatch.setattr("catocode.dispatcher._build_prompt", AsyncMock(return_value="fix prompt"))
+    monkeypatch.setattr("catocode.dispatcher._index_repo_from_container", lambda *args, **kwargs: None)
+    monkeypatch.setattr("catocode.dispatcher.prepare_codebase_graph_runtime", lambda *args, **kwargs: None)
+    monkeypatch.setattr("catocode.dispatcher.RETRY_DELAY_SECS", 0)
+
+    async def fake_execute_sdk_runner(**kwargs):
+        store.add_log(
+            kwargs["activity_id"],
+            json.dumps({"type": "result", "result": "Fix failed", "session_id": "sdk-old", "cost_usd": 0.2}),
+        )
+        return 1, "sdk-old", 0.2
+
+    monkeypatch.setattr("catocode.dispatcher._execute_sdk_runner", fake_execute_sdk_runner)
+    monkeypatch.setattr("catocode.dispatcher._notify_failure", AsyncMock())
+
+    await dispatch(
+        activity_id=activity_id,
+        store=store,
+        container_mgr=container_mgr,
+        anthropic_api_key="sk-ant",
+        github_token="ghp-token",
+        verbose=False,
+    )
+
+    runtime_session = store.get_runtime_session(runtime_session_id)
+    assert runtime_session is not None
+    assert runtime_session["status"] == "needs_recovery"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_fix_issue_restores_latest_checkpoint_before_recovery_run(monkeypatch, tmp_path):
+    from catocode.dispatcher import dispatch
+
+    store = Store(db_path=tmp_path / "test.db")
+    _seed_ready_repo(store)
+    runtime_session_id = store.create_runtime_session(
+        repo_id="owner-repo",
+        entry_kind="fix_issue",
+        status="needs_recovery",
+        worktree_path="/repos/.worktrees/owner-repo/runtime-session-recover",
+        branch_name="catocode/session/runtime-session-recover",
+        issue_number=42,
+        sdk_session_id="sdk-old",
+    )
+    store.replace_runtime_session_resolution(
+        runtime_session_id,
+        {
+            "hypotheses": [{"id": "h1", "summary": "Recover from last good fix point", "status": "active"}],
+            "todos": [],
+            "checkpoints": [{"id": "c1", "label": "verified-fix", "status": "done", "commit_sha": "abc123"}],
+        },
+    )
+    activity_id = store.add_activity("owner-repo", "fix_issue", "issue:42")
+    store.update_activity(activity_id, session_id=runtime_session_id)
+    container_mgr = SessionAwareContainerManager("/repos/.worktrees/owner-repo/runtime-session-recover")
+
+    monkeypatch.setattr("catocode.dispatcher._build_prompt", AsyncMock(return_value="fix prompt"))
+    monkeypatch.setattr("catocode.dispatcher._index_repo_from_container", lambda *args, **kwargs: None)
+    monkeypatch.setattr("catocode.dispatcher.prepare_codebase_graph_runtime", lambda *args, **kwargs: None)
+
+    async def fake_execute_sdk_runner(**kwargs):
+        store.add_log(
+            kwargs["activity_id"],
+            json.dumps({"type": "result", "result": "Recovered", "session_id": "sdk-new", "cost_usd": 0.2}),
+        )
+        return 0, "sdk-new", 0.2
+
+    monkeypatch.setattr("catocode.dispatcher._execute_sdk_runner", fake_execute_sdk_runner)
+
+    await dispatch(
+        activity_id=activity_id,
+        store=store,
+        container_mgr=container_mgr,
+        anthropic_api_key="sk-ant",
+        github_token="ghp-token",
+        verbose=False,
+    )
+
+    assert container_mgr.reset_checkout_calls == [
+        ("/repos/.worktrees/owner-repo/runtime-session-recover", "abc123")
+    ]

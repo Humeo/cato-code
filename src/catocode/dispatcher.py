@@ -337,6 +337,11 @@ async def dispatch(
             existing_session_id=activity.get("session_id"),
         )
         if runtime_session is not None:
+            recovery_checkpoint = (
+                _latest_recovery_checkpoint(store, runtime_session)
+                if runtime_session.get("status") == "needs_recovery"
+                else None
+            )
             if supports_session_worktrees:
                 activity_workdir = container_mgr.ensure_session_worktree(repo_id, repo_url, runtime_session["id"])
                 store.update_runtime_session(
@@ -358,7 +363,10 @@ async def dispatch(
                 activity = store.get_activity(activity_id) or activity
             runtime_session = store.get_runtime_session(runtime_session["id"]) or runtime_session
             if supports_reset_checkout:
-                container_mgr.reset_checkout(activity_workdir)
+                container_mgr.reset_checkout(
+                    activity_workdir,
+                    target_ref=(recovery_checkpoint or {}).get("commit_sha"),
+                )
             elif activity["kind"] != "respond_review":
                 container_mgr.reset_repo(repo_id)
         elif activity["kind"] != "respond_review":
@@ -382,6 +390,7 @@ async def dispatch(
                     activity=activity,
                     repo=repo,
                     runtime_session=runtime_session,
+                    store=store,
                     max_turns=max_turns,
                 ),
             )
@@ -455,11 +464,8 @@ async def dispatch(
             _record_runtime_result_steps(store, activity_id, activity_result)
             if runtime_session is not None:
                 resolution_state = _normalize_resolution_state(activity_result)
-                update_fields: dict[str, object] = {}
                 if resolution_state is not None:
-                    update_fields["resolution_state"] = json.dumps(resolution_state)
-                if update_fields:
-                    store.update_runtime_session(runtime_session["id"], **update_fields)
+                    store.replace_runtime_session_resolution(runtime_session["id"], resolution_state)
                     runtime_session = store.get_runtime_session(runtime_session["id"]) or runtime_session
         repo_memory_result_text = _extract_result_text(final_attempt_logs)
         repo_memory_decision = _extract_repo_memory_decision(repo_memory_result_text)
@@ -530,6 +536,8 @@ async def dispatch(
                     runtime_session["id"],
                     status="failed",
                 )
+            else:
+                _mark_runtime_session_needs_recovery(store, activity["kind"], runtime_session)
             logger.warning("Activity %s failed after %d attempts", activity_id[:8], MAX_RETRIES)
             await _notify_failure(activity, repo, github_token, summary)
 
@@ -539,6 +547,8 @@ async def dispatch(
         store.update_activity(activity_id, status="failed", summary=summary)
         if runtime_session is not None and should_auto_terminal_session(activity["kind"]):
             finalize_runtime_session(store, runtime_session["id"], status="failed")
+        else:
+            _mark_runtime_session_needs_recovery(store, activity["kind"], runtime_session)
         if activity["kind"] == "setup":
             store.update_repo_lifecycle(
                 repo_id,
@@ -555,6 +565,8 @@ async def dispatch(
         store.update_activity(activity_id, status="failed", summary=summary)
         if runtime_session is not None and should_auto_terminal_session(activity["kind"]):
             finalize_runtime_session(store, runtime_session["id"], status="failed")
+        else:
+            _mark_runtime_session_needs_recovery(store, activity["kind"], runtime_session)
         if activity["kind"] == "setup":
             store.update_repo_lifecycle(
                 repo_id,
@@ -1121,6 +1133,7 @@ def _build_activity_envelope(
     activity: dict,
     repo: dict,
     runtime_session: dict,
+    store: Store,
     max_turns: int,
 ) -> ActivityEnvelope:
     issue_number = issue_number_from_trigger(activity.get("trigger"))
@@ -1128,14 +1141,9 @@ def _build_activity_envelope(
     approval_required = bool(activity.get("requires_approval"))
     approval_granted = not approval_required
     memory = {}
-    raw_resolution_state = runtime_session.get("resolution_state")
-    if isinstance(raw_resolution_state, str) and raw_resolution_state.strip():
-        try:
-            parsed_resolution_state = json.loads(raw_resolution_state)
-        except json.JSONDecodeError:
-            parsed_resolution_state = None
-        if isinstance(parsed_resolution_state, dict):
-            memory["resolution"] = parsed_resolution_state
+    resolution_memory = _load_runtime_session_resolution(store, runtime_session)
+    if resolution_memory is not None:
+        memory["resolution"] = resolution_memory
 
     return ActivityEnvelope(
         activity={
@@ -1226,6 +1234,52 @@ def _normalize_resolution_state(runtime_result: ActivityResultEnvelope) -> dict 
     if any(normalized.values()):
         return normalized
     return None
+
+
+def _load_runtime_session_resolution(store: "Store", runtime_session: dict) -> dict | None:
+    session_id = runtime_session["id"]
+    hypotheses = store.list_runtime_session_hypotheses(session_id)
+    todos = store.list_runtime_session_todos(session_id)
+    checkpoints = store.list_runtime_session_checkpoints(session_id)
+    if hypotheses or todos or checkpoints:
+        return {
+            "hypotheses": hypotheses,
+            "todos": todos,
+            "checkpoints": checkpoints,
+        }
+
+    raw_resolution_state = runtime_session.get("resolution_state")
+    if isinstance(raw_resolution_state, str) and raw_resolution_state.strip():
+        try:
+            parsed_resolution_state = json.loads(raw_resolution_state)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed_resolution_state, dict):
+            return parsed_resolution_state
+    return None
+
+
+def _latest_recovery_checkpoint(store: "Store", runtime_session: dict) -> dict | None:
+    return store.get_latest_runtime_session_checkpoint(runtime_session["id"])
+
+
+def _mark_runtime_session_needs_recovery(
+    store: "Store",
+    activity_kind: str,
+    runtime_session: dict | None,
+) -> None:
+    if runtime_session is None:
+        return
+    if activity_kind not in {"fix_issue", "respond_review"}:
+        return
+    checkpoint = _latest_recovery_checkpoint(store, runtime_session)
+    if checkpoint is None:
+        return
+    store.update_runtime_session(
+        runtime_session["id"],
+        status="needs_recovery",
+        last_activity_at=_now_iso(),
+    )
 
 
 def _record_runtime_result_steps(store: "Store", activity_id: str, runtime_result: ActivityResultEnvelope) -> None:
