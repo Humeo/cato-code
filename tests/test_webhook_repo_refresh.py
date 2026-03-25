@@ -86,3 +86,32 @@ def test_app_merged_pr_webhook_queues_repo_memory_refresh(tmp_path: Path):
     assert metadata["pr_number"] == 42
     assert metadata["merge_commit_sha"] == "abc123"
     assert metadata["title"] == "Ship new workflow"
+
+
+def test_bot_merged_pr_webhook_queues_repo_memory_refresh(tmp_path: Path):
+    store = Store(db_path=tmp_path / "test.db")
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo("owner-repo", watch=1)
+    client = _make_client(store)
+
+    payload = _merged_pr_payload()
+    payload["sender"] = {"login": "merge-bot[bot]", "type": "Bot"}
+
+    resp = client.post(
+        "/webhook/github/owner-repo",
+        content=json.dumps(payload).encode(),
+        headers={
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-merged-bot-1",
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert resp.status_code == 200
+    activities = store.list_activities("owner-repo")
+    assert [a["kind"] for a in activities] == ["refresh_repo_memory_review"]
+    assert activities[0]["trigger"] == "repo_memory_refresh:pr:42"
+    metadata = json.loads(activities[0]["metadata"])
+    assert metadata["pr_number"] == 42
+    assert metadata["merge_commit_sha"] == "abc123"
+    assert metadata["title"] == "Ship new workflow"

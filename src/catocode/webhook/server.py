@@ -389,12 +389,6 @@ class WebhookServer:
         if not pull_request.get("merged"):
             return False
 
-        sender = payload.get("sender", {})
-        sender_login = sender.get("login", "unknown")
-        sender_type = sender.get("type", "")
-        if sender_type == "Bot" or sender_login.endswith("[bot]"):
-            return False
-
         pr_number = pull_request.get("number")
         merge_commit_sha = pull_request.get("merge_commit_sha")
         title = pull_request.get("title", "")
