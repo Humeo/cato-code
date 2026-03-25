@@ -189,9 +189,6 @@ CREATE TABLE IF NOT EXISTS codebase_graph_state (
 
 CREATE INDEX IF NOT EXISTS idx_code_defs_repo_name ON code_definitions(repo_id, symbol_name);
 CREATE INDEX IF NOT EXISTS idx_code_defs_repo_file ON code_definitions(repo_id, file_path);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_inflight_refresh_repo_memory_review
-ON activities(repo_id, trigger)
-WHERE kind = 'refresh_repo_memory_review' AND status IN ('pending', 'running');
 """
 
 # Migrations: columns added after initial schema
@@ -270,6 +267,7 @@ class Store:
     def _migrate(self) -> None:
         """Apply schema migrations idempotently."""
         _logger = logging.getLogger(__name__)
+        self._dedupe_legacy_inflight_refresh_activities()
         for migration in _MIGRATIONS:
             try:
                 self._db.execute(migration)
@@ -316,6 +314,60 @@ class Store:
                      LIMIT 1
                  ) = 'done'"""
         )
+        self._db.commit()
+
+    def _dedupe_legacy_inflight_refresh_activities(self) -> None:
+        """Collapse legacy duplicate in-flight refresh activities before the unique index is created."""
+        rows = self._db.execute(
+            """SELECT id, repo_id, trigger, created_at
+               FROM activities
+               WHERE kind = 'refresh_repo_memory_review'
+                 AND status IN ('pending', 'running')
+               ORDER BY repo_id, trigger, created_at, id"""
+        )
+        if not rows:
+            return
+
+        seen_keys: set[tuple[str, str | None]] = set()
+        duplicate_ids: list[str] = []
+        for row in rows:
+            key = (row["repo_id"], row["trigger"])
+            if key not in seen_keys:
+                seen_keys.add(key)
+                continue
+            duplicate_ids.append(row["id"])
+
+        if not duplicate_ids:
+            return
+
+        reason = "Superseded duplicate refresh activity during migration"
+        finished_at = _now()
+        for activity_id in duplicate_ids:
+            self._db.execute(
+                """UPDATE activities
+                   SET status = 'failed', summary = ?, updated_at = ?
+                   WHERE id = ? AND status IN ('pending', 'running')""",
+                (reason, finished_at, activity_id),
+            )
+            for step in self._db.execute(
+                "SELECT step_key, started_at FROM activity_steps WHERE activity_id = ? AND status = 'running'",
+                (activity_id,),
+            ):
+                self._db.execute(
+                    """UPDATE activity_steps
+                       SET status = 'failed',
+                           finished_at = ?,
+                           duration_ms = ?,
+                           reason = ?
+                       WHERE activity_id = ? AND step_key = ?""",
+                    (
+                        finished_at,
+                        _duration_ms(step.get("started_at"), finished_at),
+                        reason,
+                        activity_id,
+                        step["step_key"],
+                    ),
+                )
         self._db.commit()
 
     # --- repos ---

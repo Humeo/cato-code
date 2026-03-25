@@ -373,6 +373,66 @@ def test_mark_crashed_refresh_activities_fail_running_steps(store):
     assert repo["lifecycle_status"] == "ready"
 
 
+def test_store_upgrade_deduplicates_legacy_inflight_refresh_rows(tmp_path):
+    db_path = tmp_path / "legacy-duplicates.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """CREATE TABLE activities (
+            id TEXT PRIMARY KEY,
+            repo_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            trigger TEXT,
+            status TEXT DEFAULT 'pending',
+            session_id TEXT,
+            summary TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )"""
+    )
+    conn.execute(
+        """INSERT INTO activities
+           (id, repo_id, kind, trigger, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "refresh-oldest",
+            "owner-repo",
+            "refresh_repo_memory_review",
+            "repo_memory_refresh:pr:42",
+            "pending",
+            "2026-03-24T12:00:00+00:00",
+            "2026-03-24T12:00:00+00:00",
+        ),
+    )
+    conn.execute(
+        """INSERT INTO activities
+           (id, repo_id, kind, trigger, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "refresh-newer",
+            "owner-repo",
+            "refresh_repo_memory_review",
+            "repo_memory_refresh:pr:42",
+            "running",
+            "2026-03-24T12:05:00+00:00",
+            "2026-03-24T12:05:00+00:00",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    reopened = Store(db_path=db_path)
+    activities = reopened.list_activities("owner-repo")
+
+    inflight = [a for a in activities if a["status"] in {"pending", "running"}]
+    failed = [a for a in activities if a["status"] == "failed"]
+
+    assert len(inflight) == 1
+    assert inflight[0]["id"] == "refresh-oldest"
+    assert len(failed) == 1
+    assert failed[0]["id"] == "refresh-newer"
+    assert "duplicate" in (failed[0]["summary"] or "").lower()
+
+
 def test_store_restart_does_not_resurrect_repo_after_newer_failed_setup(tmp_path):
     db_path = tmp_path / "restart.db"
     store = Store(db_path=db_path)
