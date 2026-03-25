@@ -29,6 +29,22 @@ Use the internal `codebase_graph` skill for structured code navigation instead o
 4. Verify all important findings by reading the real source and tests.
 5. If `cg` is unavailable or does not help, fall back to normal repo exploration and continue.
 
+## Session Branch and Semantic Checkpoints
+
+You are running inside a dedicated CatoCode session worktree. Do **not** create a new branch for this issue.
+
+1. Stay on the existing **session branch** and use the current worktree as your isolated workspace.
+2. Maintain a single active hypothesis and a short todo list as you work.
+3. Create a **semantic checkpoint** after any meaningful milestone, especially:
+   - after successful reproduction
+   - after a risky refactor or intermediate fix
+   - after final verification passes
+4. A semantic checkpoint should be a real git commit on the session branch with a clear message such as:
+   - `checkpoint: reproduced issue 123`
+   - `checkpoint: passing targeted regression`
+5. Include each checkpoint's label and commit SHA in your final `artifacts.resolution.checkpoints`.
+6. If this session already contains prior hypotheses, todos, or checkpoints, continue from them instead of restarting from scratch.
+
 ## The Two-Layer Evidence Protocol
 
 This is what makes RepoCraft different from other AI agents. Follow this rigorously.
@@ -113,12 +129,7 @@ Now that you've proven the bug exists, write a **minimal, targeted fix**:
 - Don't refactor unrelated code
 - Add comments if the fix is non-obvious
 
-Create a branch:
-```bash
-git checkout -b repocraft/fix/{issue_number}-{short-slug}
-```
-
-Example: `repocraft/fix/123-null-pointer-login`
+Stay on the existing session branch. Do **not** create a new issue branch inside the worktree.
 
 ### Step 4: Layer 2 — Verify
 
@@ -137,7 +148,9 @@ pytest 2>&1 | tee /tmp/test-suite-after.txt
 - `/tmp/evidence-after.txt` shows the bug is fixed
 - `/tmp/test-suite-after.txt` shows all tests pass (no regressions)
 
-### Step 5: Commit
+### Step 5: Checkpoint and Commit
+
+Before the final fix commit, create at least one semantic checkpoint commit if you have not already done so for this session.
 
 ```bash
 git add <changed-files>
@@ -244,6 +257,13 @@ At the end, output a summary:
    - After: /tmp/evidence-after.txt
    - Test suite: /tmp/test-suite-after.txt
 ```
+
+Your final result text must be a valid `ActivityResultEnvelope` JSON object. In `artifacts.resolution`, include:
+- `hypotheses`
+- `todos`
+- `checkpoints`
+
+Each semantic checkpoint should include a `label`, `status`, and `commit_sha`.
 
 ## Why This Matters
 

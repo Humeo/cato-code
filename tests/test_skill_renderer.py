@@ -81,6 +81,9 @@ def test_build_fix_issue_prompt():
     assert "Title: Test Issue" in prompt
     assert "ActivityResultEnvelope" in prompt
     assert "artifacts.resolution" in prompt
+    assert "session branch" in prompt.lower()
+    assert "checkpoint" in prompt.lower()
+    assert "repocraft/fix" not in prompt
 
 
 def test_build_patrol_prompt():
@@ -184,3 +187,10 @@ def test_build_analyze_issue_prompt_has_no_preloaded_code_context_section():
 def test_issue_skills_direct_agent_to_codebase_graph():
     assert "codebase_graph" in read_skill("fix_issue")
     assert "codebase_graph" in read_skill("analyze_issue")
+
+
+def test_fix_issue_skill_uses_session_branch_and_semantic_checkpoints():
+    skill = read_skill("fix_issue")
+    assert "session branch" in skill.lower()
+    assert "semantic checkpoint" in skill.lower()
+    assert "git checkout -b repocraft/fix" not in skill

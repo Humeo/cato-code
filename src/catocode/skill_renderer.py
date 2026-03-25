@@ -143,8 +143,10 @@ Follow the step-by-step workflow in this skill. Remember:
 3. Layer 1 evidence is MANDATORY before fixing
 4. Layer 2 evidence is MANDATORY before creating PR
 5. Include the Evidence table in your PR description
-6. Finish with a valid `ActivityResultEnvelope` JSON object as the final result text
-7. Include `writebacks`, `artifacts.verification`, and `artifacts.resolution` with hypotheses, todos, and checkpoints
+6. Stay on the existing session branch inside the current worktree; do not create a new issue branch
+7. Create semantic checkpoint commits and include them in `artifacts.resolution.checkpoints`
+8. Finish with a valid `ActivityResultEnvelope` JSON object as the final result text
+9. Include `writebacks`, `artifacts.verification`, and `artifacts.resolution` with hypotheses, todos, and checkpoints
 
 Begin now.
 """
