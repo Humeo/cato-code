@@ -567,6 +567,9 @@ class Store:
 
     def mark_crashed_activities_failed(self) -> int:
         """On daemon startup, mark any status=running activities as failed (previous crash)."""
+        crashed_activities = self._db.execute(
+            "SELECT id, repo_id, kind FROM activities WHERE status = 'running'"
+        )
         crashed_setups = self._db.execute(
             "SELECT id, repo_id FROM activities WHERE status = 'running' AND kind = 'setup'"
         )
@@ -581,7 +584,7 @@ class Store:
             "WHERE status = 'running'",
             (failed_at,),
         )
-        for activity in crashed_setups:
+        for activity in crashed_activities:
             running_steps = self._db.execute(
                 "SELECT step_key, started_at FROM activity_steps WHERE activity_id = ? AND status = 'running'",
                 (activity["id"],),
@@ -598,6 +601,7 @@ class Store:
                         step["step_key"],
                     ),
                 )
+        for activity in crashed_setups:
             self._db.execute(
                 "UPDATE repos SET lifecycle_status = 'error', last_error = ?, last_setup_activity_id = ? "
                 "WHERE id = ?",

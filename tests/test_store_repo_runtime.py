@@ -344,6 +344,35 @@ def test_mark_crashed_setup_activities_fail_running_steps(store):
     assert step["duration_ms"] is not None
 
 
+def test_mark_crashed_refresh_activities_fail_running_steps(store):
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo_lifecycle(
+        "owner-repo",
+        lifecycle_status="ready",
+        last_ready_at="2026-03-24T12:10:00+00:00",
+    )
+    activity_id = store.add_activity("owner-repo", "refresh_repo_memory_review", "repo_memory_refresh:pr:42")
+    store.update_activity(activity_id, status="running")
+    store.upsert_activity_step(
+        activity_id,
+        "review_repo_memory",
+        status="running",
+        started_at="2026-03-24T12:00:00+00:00",
+    )
+
+    store.mark_crashed_activities_failed()
+
+    step = store.get_activity_step(activity_id, "review_repo_memory")
+    repo = store.get_repo("owner-repo")
+    assert step is not None
+    assert step["status"] == "failed"
+    assert step["reason"] == "Interrupted (daemon restarted)"
+    assert step["finished_at"] is not None
+    assert step["duration_ms"] is not None
+    assert repo is not None
+    assert repo["lifecycle_status"] == "ready"
+
+
 def test_store_restart_does_not_resurrect_repo_after_newer_failed_setup(tmp_path):
     db_path = tmp_path / "restart.db"
     store = Store(db_path=db_path)
