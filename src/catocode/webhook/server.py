@@ -144,16 +144,16 @@ class WebhookServer:
             delivery_id=x_github_delivery,
             repo_id=repo_id,
         )
-        queued_repo_memory_refresh = self._queue_merged_pr_repo_memory_refresh(
+        repo_memory_refresh_status = self._queue_merged_pr_repo_memory_refresh(
             x_github_event, repo_id, payload
         )
 
         if event is None:
             logger.debug("Webhook event ignored: %s for repo %s", x_github_event, repo_id)
             self._store.mark_webhook_event_processed(x_github_delivery)
-            if queued_repo_memory_refresh:
+            if repo_memory_refresh_status is not None:
                 return JSONResponse({
-                    "status": "queued_repo_memory_refresh",
+                    "status": repo_memory_refresh_status,
                     "event_type": x_github_event,
                 })
             return JSONResponse({"status": "ignored", "event_type": x_github_event})
@@ -357,13 +357,13 @@ class WebhookServer:
             return JSONResponse({"status": "ignored", "event_type": x_github_event})
 
         event = parse_webhook(x_github_event, payload, x_github_delivery, repo_id)
-        queued_repo_memory_refresh = self._queue_merged_pr_repo_memory_refresh(
+        repo_memory_refresh_status = self._queue_merged_pr_repo_memory_refresh(
             x_github_event, repo_id, payload
         )
         if event is None:
             self._store.mark_webhook_event_processed(x_github_delivery)
-            if queued_repo_memory_refresh:
-                return JSONResponse({"status": "queued_repo_memory_refresh", "event_type": x_github_event})
+            if repo_memory_refresh_status is not None:
+                return JSONResponse({"status": repo_memory_refresh_status, "event_type": x_github_event})
             return JSONResponse({"status": "ignored", "event_type": x_github_event})
 
         decision = await decide_engagement(event, repo, self._store)
@@ -395,48 +395,42 @@ class WebhookServer:
 
     def _queue_merged_pr_repo_memory_refresh(
         self, event_name: str, repo_id: str, payload: dict[str, Any]
-    ) -> bool:
+    ) -> str | None:
         """Queue repo memory refresh work for merged PR closures."""
         if event_name != "pull_request":
-            return False
+            return None
 
         if payload.get("action") != "closed":
-            return False
+            return None
 
         pull_request = payload.get("pull_request")
         if not isinstance(pull_request, dict):
-            return False
+            return None
 
         if not pull_request.get("merged"):
-            return False
+            return None
 
         pr_number = pull_request.get("number")
         merge_commit_sha = pull_request.get("merge_commit_sha")
         title = pull_request.get("title", "")
         if pr_number is None or not merge_commit_sha:
-            return False
+            return None
 
-        trigger = f"repo_memory_refresh:pr:{pr_number}"
-        if self._store.has_inflight_activity(repo_id, "refresh_repo_memory_review", trigger):
+        activity_id = self._store.enqueue_refresh_repo_memory_review(
+            repo_id=repo_id,
+            pr_number=pr_number,
+            merge_commit_sha=merge_commit_sha,
+            title=title,
+        )
+        if activity_id is None:
             logger.info(
                 "Skipped duplicate repo memory refresh for merged PR #%s in %s",
                 pr_number,
                 repo_id,
             )
-            return True
-
-        self._store.add_activity(
-            repo_id=repo_id,
-            kind="refresh_repo_memory_review",
-            trigger=trigger,
-            metadata={
-                "pr_number": pr_number,
-                "merge_commit_sha": merge_commit_sha,
-                "title": title,
-            },
-        )
+            return "duplicate_inflight"
         logger.info("Queued repo memory refresh for merged PR #%s in %s", pr_number, repo_id)
-        return True
+        return "queued_repo_memory_refresh"
 
     async def _handle_patrol_side_effects(
         self, event_type: str, payload: dict[str, Any], repo_id: str

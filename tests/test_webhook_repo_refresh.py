@@ -146,6 +146,8 @@ def test_same_merged_pr_across_both_webhook_entrypoints_queues_one_refresh_activ
 
     assert github_resp.status_code == 200
     assert app_resp.status_code == 200
+    assert github_resp.json()["status"] == "queued_repo_memory_refresh"
+    assert app_resp.json()["status"] == "duplicate_inflight"
 
     activities = store.list_activities("owner-repo")
     assert [a["kind"] for a in activities] == ["refresh_repo_memory_review"]

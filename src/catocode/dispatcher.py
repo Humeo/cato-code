@@ -383,7 +383,8 @@ async def dispatch(
                 )
 
         # 9. Extract summary from result line
-        summary = _extract_summary(final_attempt_logs)
+        summary_logs = final_attempt_logs if activity["kind"] == "refresh_repo_memory_review" else store.get_logs(activity_id)
+        summary = _extract_summary(summary_logs)
         repo_memory_result_text = _extract_result_text(final_attempt_logs)
         repo_memory_decision = _extract_repo_memory_decision(repo_memory_result_text)
         if refresh_step_started_at is not None and exit_code == 0 and repo_memory_decision is None:

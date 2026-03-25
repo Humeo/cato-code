@@ -124,3 +124,82 @@ async def test_dispatch_fix_issue_does_not_call_context_retriever(monkeypatch, t
     activity = store.get_activity(activity_id)
     assert activity is not None
     assert activity["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_non_refresh_summary_uses_latest_useful_result_across_retries(monkeypatch, tmp_path):
+    from catocode.dispatcher import dispatch
+
+    class FakeExecResult:
+        def __init__(self, exit_code: int = 0, stdout: str = "", stderr: str = "") -> None:
+            self.exit_code = exit_code
+            self.stdout = stdout
+            self.stderr = stderr
+
+    class ReadyRepoContainerManager:
+        def ensure_running(
+            self,
+            anthropic_api_key: str,
+            github_token: str,
+            anthropic_base_url: str | None = None,
+        ) -> None:
+            return None
+
+        def ensure_repo(self, repo_id: str, repo_url: str) -> None:
+            return None
+
+        def exec(self, command: str, workdir: str = "/repos") -> FakeExecResult:
+            if command == "test -f CLAUDE.md":
+                return FakeExecResult(exit_code=0)
+            if command == "git rev-parse HEAD":
+                return FakeExecResult(stdout="abc123\n")
+            raise AssertionError(f"Unexpected command: {command}")
+
+        def reset_repo(self, repo_id: str) -> None:
+            return None
+
+    store = Store(db_path=tmp_path / "test.db")
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    setup_id = store.add_activity("owner-repo", "setup", "watch")
+    store.update_activity(setup_id, status="done", summary="ready")
+    store.update_repo_lifecycle(
+        "owner-repo",
+        lifecycle_status="ready",
+        last_ready_at="2026-03-24T12:00:00+00:00",
+        last_setup_activity_id=setup_id,
+    )
+    activity_id = store.add_activity("owner-repo", "fix_issue", "issue:42")
+
+    monkeypatch.setattr("catocode.dispatcher._index_repo_from_container", lambda *args, **kwargs: None)
+    monkeypatch.setattr("catocode.dispatcher.prepare_issue_codebase_graph_runtime", lambda *args, **kwargs: None)
+    monkeypatch.setattr("catocode.dispatcher._build_prompt", AsyncMock(return_value="prompt"))
+    monkeypatch.setattr("catocode.dispatcher.asyncio.sleep", AsyncMock())
+
+    attempt = 0
+
+    async def fake_execute_sdk_runner(**kwargs):
+        nonlocal attempt
+        attempt += 1
+        if attempt == 1:
+            store.add_log(
+                kwargs["activity_id"],
+                '{"type": "result", "result": "Useful summary from first retry."}',
+            )
+            return 1, "session-retry-1", 0.1
+        return 1, "session-retry-2", 0.2
+
+    monkeypatch.setattr("catocode.dispatcher._execute_sdk_runner", fake_execute_sdk_runner)
+
+    await dispatch(
+        activity_id=activity_id,
+        store=store,
+        container_mgr=ReadyRepoContainerManager(),
+        anthropic_api_key="anthropic-key",
+        github_token="github-token",
+        verbose=False,
+    )
+
+    activity = store.get_activity(activity_id)
+    assert activity is not None
+    assert activity["status"] == "failed"
+    assert activity["summary"] == "Useful summary from first retry."

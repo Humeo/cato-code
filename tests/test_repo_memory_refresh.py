@@ -80,6 +80,30 @@ def _seed_ready_repo(store: Store) -> tuple[str, str]:
     return repo_id, activity_id
 
 
+def test_store_refresh_enqueue_is_atomic_for_inflight_duplicates(store):
+    repo_id = "owner-repo"
+    store.add_repo(repo_id, "https://github.com/owner/repo")
+
+    first_activity_id = store.enqueue_refresh_repo_memory_review(
+        repo_id=repo_id,
+        pr_number=42,
+        merge_commit_sha="abc123",
+        title="Ship new workflow",
+    )
+    second_activity_id = store.enqueue_refresh_repo_memory_review(
+        repo_id=repo_id,
+        pr_number=42,
+        merge_commit_sha="abc123",
+        title="Ship new workflow",
+    )
+
+    assert first_activity_id is not None
+    assert second_activity_id is None
+    activities = store.list_activities(repo_id)
+    assert [activity["kind"] for activity in activities] == ["refresh_repo_memory_review"]
+    assert activities[0]["trigger"] == "repo_memory_refresh:pr:42"
+
+
 def test_build_refresh_repo_memory_review_prompt_includes_merge_context():
     from catocode.skill_renderer import build_refresh_repo_memory_review_prompt
 

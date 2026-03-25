@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -188,6 +189,9 @@ CREATE TABLE IF NOT EXISTS codebase_graph_state (
 
 CREATE INDEX IF NOT EXISTS idx_code_defs_repo_name ON code_definitions(repo_id, symbol_name);
 CREATE INDEX IF NOT EXISTS idx_code_defs_repo_file ON code_definitions(repo_id, file_path);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_inflight_refresh_repo_memory_review
+ON activities(repo_id, trigger)
+WHERE kind = 'refresh_repo_memory_review' AND status IN ('pending', 'running');
 """
 
 # Migrations: columns added after initial schema
@@ -224,6 +228,9 @@ _MIGRATIONS = [
     PRIMARY KEY (activity_id, step_key),
     FOREIGN KEY (activity_id) REFERENCES activities(id)
 )""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_inflight_refresh_repo_memory_review
+ON activities(repo_id, trigger)
+WHERE kind = 'refresh_repo_memory_review' AND status IN ('pending', 'running')""",
 ]
 
 
@@ -355,6 +362,13 @@ class Store:
 
     # --- activities ---
 
+    @staticmethod
+    def _is_unique_constraint_error(exc: Exception) -> bool:
+        if isinstance(exc, sqlite3.IntegrityError):
+            return True
+        err_lower = str(exc).lower()
+        return "unique constraint" in err_lower or "duplicate key" in err_lower
+
     def add_activity(self, repo_id: str, kind: str, trigger: str | None = None, metadata: dict | None = None) -> str:
         import json as _json
         activity_id = str(uuid.uuid4())
@@ -367,6 +381,41 @@ class Store:
             (activity_id, repo_id, kind, trigger, metadata_str, now, now),
         )
         self._db.commit()
+        return activity_id
+
+    def enqueue_refresh_repo_memory_review(
+        self,
+        repo_id: str,
+        pr_number: int,
+        merge_commit_sha: str,
+        title: str = "",
+    ) -> str | None:
+        import json as _json
+
+        activity_id = str(uuid.uuid4())
+        now = _now()
+        trigger = f"repo_memory_refresh:pr:{pr_number}"
+        metadata = _json.dumps(
+            {
+                "pr_number": pr_number,
+                "merge_commit_sha": merge_commit_sha,
+                "title": title,
+            }
+        )
+
+        try:
+            self._db.execute(
+                """INSERT INTO activities
+                   (id, repo_id, kind, trigger, status, metadata, created_at, updated_at)
+                   VALUES (?, ?, 'refresh_repo_memory_review', ?, 'pending', ?, ?, ?)""",
+                (activity_id, repo_id, trigger, metadata, now, now),
+            )
+            self._db.commit()
+        except Exception as exc:
+            if self._is_unique_constraint_error(exc):
+                return None
+            raise
+
         return activity_id
 
     def get_activity(self, activity_id: str) -> dict | None:
