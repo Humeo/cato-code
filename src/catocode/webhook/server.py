@@ -133,13 +133,20 @@ class WebhookServer:
         )
 
         # Parse webhook into normalized event
+        if x_github_event == "pull_request" and not isinstance(payload.get("pull_request"), dict):
+            logger.debug("Malformed pull_request payload ignored for repo %s", repo_id)
+            self._store.mark_webhook_event_processed(x_github_delivery)
+            return JSONResponse({"status": "ignored", "event_type": x_github_event})
+
         event = parse_webhook(
             event_name=x_github_event,
             payload=payload,
             delivery_id=x_github_delivery,
             repo_id=repo_id,
         )
-        queued_repo_memory_refresh = self._queue_merged_pr_repo_memory_refresh(repo_id, payload)
+        queued_repo_memory_refresh = self._queue_merged_pr_repo_memory_refresh(
+            x_github_event, repo_id, payload
+        )
 
         if event is None:
             logger.debug("Webhook event ignored: %s for repo %s", x_github_event, repo_id)
@@ -345,8 +352,14 @@ class WebhookServer:
             event_type=x_github_event,
             payload=json.dumps(payload),
         )
+        if x_github_event == "pull_request" and not isinstance(payload.get("pull_request"), dict):
+            self._store.mark_webhook_event_processed(x_github_delivery)
+            return JSONResponse({"status": "ignored", "event_type": x_github_event})
+
         event = parse_webhook(x_github_event, payload, x_github_delivery, repo_id)
-        queued_repo_memory_refresh = self._queue_merged_pr_repo_memory_refresh(repo_id, payload)
+        queued_repo_memory_refresh = self._queue_merged_pr_repo_memory_refresh(
+            x_github_event, repo_id, payload
+        )
         if event is None:
             self._store.mark_webhook_event_processed(x_github_delivery)
             if queued_repo_memory_refresh:
@@ -380,12 +393,20 @@ class WebhookServer:
         self._store.mark_webhook_event_processed(x_github_delivery)
         return JSONResponse({"status": "created", "activity_id": activity_id, "activity_kind": decision.activity_kind})
 
-    def _queue_merged_pr_repo_memory_refresh(self, repo_id: str, payload: dict[str, Any]) -> bool:
+    def _queue_merged_pr_repo_memory_refresh(
+        self, event_name: str, repo_id: str, payload: dict[str, Any]
+    ) -> bool:
         """Queue repo memory refresh work for merged PR closures."""
+        if event_name != "pull_request":
+            return False
+
         if payload.get("action") != "closed":
             return False
 
-        pull_request = payload.get("pull_request", {})
+        pull_request = payload.get("pull_request")
+        if not isinstance(pull_request, dict):
+            return False
+
         if not pull_request.get("merged"):
             return False
 

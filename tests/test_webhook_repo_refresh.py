@@ -115,3 +115,54 @@ def test_bot_merged_pr_webhook_queues_repo_memory_refresh(tmp_path: Path):
     assert metadata["pr_number"] == 42
     assert metadata["merge_commit_sha"] == "abc123"
     assert metadata["title"] == "Ship new workflow"
+
+
+def test_non_pull_request_event_with_pr_payload_does_not_queue_repo_memory_refresh(
+    tmp_path: Path,
+):
+    store = Store(db_path=tmp_path / "test.db")
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo("owner-repo", watch=1)
+    client = _make_client(store)
+
+    payload = _merged_pr_payload()
+
+    resp = client.post(
+        "/webhook/github/owner-repo",
+        content=json.dumps(payload).encode(),
+        headers={
+            "X-GitHub-Event": "issues",
+            "X-GitHub-Delivery": "delivery-ignored-1",
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert store.list_activities("owner-repo") == []
+
+
+def test_null_pull_request_payload_is_ignored_without_500(tmp_path: Path):
+    store = Store(db_path=tmp_path / "test.db")
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo("owner-repo", watch=1)
+    client = _make_client(store)
+
+    payload = {
+        "action": "closed",
+        "pull_request": None,
+        "repository": {"html_url": "https://github.com/owner/repo"},
+        "sender": {"login": "maintainer"},
+    }
+
+    resp = client.post(
+        "/webhook/github/owner-repo",
+        content=json.dumps(payload).encode(),
+        headers={
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-null-pr-1",
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert store.list_activities("owner-repo") == []
