@@ -308,6 +308,52 @@ async def test_refresh_repo_memory_review_failure_keeps_repo_ready(store, monkey
 
 
 @pytest.mark.asyncio
+async def test_refresh_repo_memory_review_does_not_reuse_stale_marker_from_earlier_retry(store, monkeypatch):
+    from catocode.dispatcher import dispatch
+
+    repo_id, activity_id = _seed_ready_repo(store)
+    container_mgr = ReadyRefreshContainerManager()
+    attempt = 0
+
+    monkeypatch.setattr("catocode.dispatcher._build_prompt", AsyncMock(return_value="refresh prompt"))
+    monkeypatch.setattr("catocode.dispatcher._index_repo_from_container", lambda *args, **kwargs: None)
+    monkeypatch.setattr("catocode.dispatcher.asyncio.sleep", AsyncMock())
+
+    async def fake_execute_sdk_runner(**kwargs):
+        nonlocal attempt
+        attempt += 1
+        if attempt == 1:
+            store.add_log(
+                kwargs["activity_id"],
+                json.dumps({"type": "result", "result": "Attempt one\nREPO_MEMORY_DECISION: skip_update"}),
+            )
+            return 1, "session-retry-1", 0.1
+        return 0, "session-retry-2", 0.2
+
+    monkeypatch.setattr("catocode.dispatcher._execute_sdk_runner", fake_execute_sdk_runner)
+
+    await dispatch(
+        activity_id=activity_id,
+        store=store,
+        container_mgr=container_mgr,
+        anthropic_api_key="sk-ant",
+        github_token="ghp-token",
+        verbose=False,
+    )
+
+    activity = store.get_activity(activity_id)
+    review_step = store.get_activity_step(activity_id, "review_repo_memory")
+
+    assert activity is not None
+    assert activity["status"] == "failed"
+    assert activity["summary"] == "Error: refresh review missing valid final decision marker"
+    assert review_step is not None
+    assert review_step["status"] == "failed"
+    assert store.get_activity_step(activity_id, "skip_update") is None
+    assert store.get_activity_step(activity_id, "update_claude_md") is None
+
+
+@pytest.mark.asyncio
 async def test_refresh_repo_memory_review_timeout_closes_running_step(store, monkeypatch):
     from catocode.dispatcher import dispatch
 

@@ -233,6 +233,7 @@ async def dispatch(
     repo_id = repo["id"]
     repo_url = repo["repo_url"]
     refresh_step_started_at: str | None = None
+    final_attempt_logs: list[dict] = []
 
     logger.info("Dispatching activity %s (kind=%s, repo=%s)", activity_id, activity["kind"], repo_id)
 
@@ -344,6 +345,7 @@ async def dispatch(
         session_id = None
         cost_usd = None
         for attempt in range(1, MAX_RETRIES + 1):
+            pre_attempt_log_count = len(store.get_logs(activity_id))
             if activity["kind"] in ("fix_issue", "analyze_issue", "refresh_repo_memory_review"):
                 try:
                     prepare_codebase_graph_runtime(repo_id, container_mgr, store, repo_workdir=f"/repos/{repo_id}")
@@ -359,6 +361,7 @@ async def dispatch(
                 session_id=resume_session_id,
                 verbose=verbose,
             )
+            final_attempt_logs = store.get_logs(activity_id)[pre_attempt_log_count:]
             if exit_code == 0:
                 break
             if attempt < MAX_RETRIES:
@@ -376,9 +379,8 @@ async def dispatch(
                 )
 
         # 9. Extract summary from result line
-        logs = store.get_logs(activity_id)
-        summary = _extract_summary(logs)
-        repo_memory_decision = _extract_repo_memory_decision(_extract_result_text(logs))
+        summary = _extract_summary(final_attempt_logs)
+        repo_memory_decision = _extract_repo_memory_decision(_extract_result_text(final_attempt_logs))
         if refresh_step_started_at is not None and exit_code == 0 and repo_memory_decision is None:
             exit_code = 1
             summary = INVALID_REPO_MEMORY_DECISION_SUMMARY
