@@ -32,6 +32,11 @@ export interface RuntimeSession {
   gc_delete_after: string | null;
   gc_status: string | null;
   gc_error?: string | null;
+  resolution_state?: {
+    hypotheses?: Array<Record<string, unknown>>;
+    todos?: Array<Record<string, unknown>>;
+    checkpoints?: Array<Record<string, unknown>>;
+  } | null;
 }
 
 export interface ActivityStep {
@@ -52,7 +57,7 @@ export interface RuntimeResult {
     sdk_session_id?: string | null;
     continued?: boolean;
   };
-  writebacks?: Record<string, unknown>;
+  writebacks?: Array<Record<string, unknown>>;
   artifacts?: Record<string, unknown>;
   metrics?: {
     cost_usd?: number | null;

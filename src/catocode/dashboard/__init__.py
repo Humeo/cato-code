@@ -43,9 +43,24 @@ def _serialize_activity(activity: dict, store: Store, *, include_detail: bool = 
 
     if include_detail:
         session = store.get_runtime_session(payload["session_id"]) if payload.get("session_id") else None
-        payload["runtime_session"] = dict(session) if session is not None else None
+        payload["runtime_session"] = _serialize_runtime_session(session)
         payload["steps"] = [dict(step) for step in store.list_activity_steps(payload["id"])]
 
+    return payload
+
+
+def _serialize_runtime_session(session: dict | None) -> dict | None:
+    if session is None:
+        return None
+    payload = dict(session)
+    raw_resolution_state = payload.get("resolution_state")
+    if isinstance(raw_resolution_state, str) and raw_resolution_state.strip():
+        try:
+            payload["resolution_state"] = json.loads(raw_resolution_state)
+        except (TypeError, json.JSONDecodeError):
+            payload["resolution_state"] = None
+    else:
+        payload["resolution_state"] = None
     return payload
 
 
@@ -81,7 +96,7 @@ def make_router(store: Store) -> APIRouter:
         stats = store.get_repo_stats(repo_id)
         if stats is None:
             raise HTTPException(status_code=404, detail="Repo not found")
-        stats["runtime_sessions"] = [dict(session) for session in store.list_repo_runtime_sessions(repo_id)]
+        stats["runtime_sessions"] = [_serialize_runtime_session(session) for session in store.list_repo_runtime_sessions(repo_id)]
         last_setup_activity_id = stats["repo"].get("last_setup_activity_id")
         stats["last_setup_activity"] = (
             dict(store.get_activity(last_setup_activity_id))

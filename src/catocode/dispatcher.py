@@ -450,9 +450,17 @@ async def dispatch(
             if cost_usd is None:
                 result_cost = activity_result.metrics.get("cost_usd")
                 cost_usd = float(result_cost) if isinstance(result_cost, (int, float)) else cost_usd
+            merged_metadata = _merge_activity_metadata(activity, activity_result.to_dict())
+            store.update_activity(activity_id, metadata=merged_metadata)
+            _record_runtime_result_steps(store, activity_id, activity_result)
             if runtime_session is not None:
-                merged_metadata = _merge_activity_metadata(activity, activity_result.to_dict())
-                store.update_activity(activity_id, metadata=merged_metadata)
+                resolution_state = _normalize_resolution_state(activity_result)
+                update_fields: dict[str, object] = {}
+                if resolution_state is not None:
+                    update_fields["resolution_state"] = json.dumps(resolution_state)
+                if update_fields:
+                    store.update_runtime_session(runtime_session["id"], **update_fields)
+                    runtime_session = store.get_runtime_session(runtime_session["id"]) or runtime_session
         repo_memory_result_text = _extract_result_text(final_attempt_logs)
         repo_memory_decision = _extract_repo_memory_decision(repo_memory_result_text)
         if refresh_step_started_at is not None and exit_code == 0 and repo_memory_decision is None:
@@ -1119,6 +1127,16 @@ def _build_activity_envelope(
     pr_number = pr_number_from_trigger(activity.get("trigger"))
     approval_required = bool(activity.get("requires_approval"))
     approval_granted = not approval_required
+    memory = {}
+    raw_resolution_state = runtime_session.get("resolution_state")
+    if isinstance(raw_resolution_state, str) and raw_resolution_state.strip():
+        try:
+            parsed_resolution_state = json.loads(raw_resolution_state)
+        except json.JSONDecodeError:
+            parsed_resolution_state = None
+        if isinstance(parsed_resolution_state, dict):
+            memory["resolution"] = parsed_resolution_state
+
     return ActivityEnvelope(
         activity={
             "id": activity["id"],
@@ -1165,6 +1183,7 @@ def _build_activity_envelope(
             "activity_id": activity["id"],
             "session_id": runtime_session["id"],
         },
+        memory=memory,
     )
 
 
@@ -1176,8 +1195,68 @@ def _append_activity_envelope(prompt: str, envelope: ActivityEnvelope) -> str:
         f"{envelope_json}\n"
         "```\n\n"
         "When you finish, return an ActivityResultEnvelope JSON object as the final result text. "
-        "If you cannot provide every optional field, still return a valid JSON object with the required fields.\n"
+        "If you cannot provide every optional field, still return a valid JSON object with the required fields.\n\n"
+        "Expected fields:\n"
+        "- `writebacks`: a list of performed GitHub writebacks such as issue comments, review replies, PR creation, or pushes\n"
+        "- `artifacts.verification`: proof-of-work summary with status, commands, and evidence paths when available\n"
+        "- `artifacts.resolution`: session memory with `hypotheses`, `todos`, and `checkpoints` so later runs can resume cleanly\n"
     )
+
+
+def _normalize_resolution_state(runtime_result: ActivityResultEnvelope) -> dict | None:
+    resolution = runtime_result.artifacts.get("resolution")
+    if not isinstance(resolution, dict):
+        return None
+
+    def _normalize_items(key: str) -> list[dict]:
+        value = resolution.get(key, [])
+        if not isinstance(value, list):
+            return []
+        normalized: list[dict] = []
+        for item in value:
+            if isinstance(item, dict):
+                normalized.append(dict(item))
+        return normalized
+
+    normalized = {
+        "hypotheses": _normalize_items("hypotheses"),
+        "todos": _normalize_items("todos"),
+        "checkpoints": _normalize_items("checkpoints"),
+    }
+    if any(normalized.values()):
+        return normalized
+    return None
+
+
+def _record_runtime_result_steps(store: "Store", activity_id: str, runtime_result: ActivityResultEnvelope) -> None:
+    verification = runtime_result.artifacts.get("verification")
+    if isinstance(verification, dict):
+        verification_status = verification.get("status")
+        if isinstance(verification_status, str) and verification_status:
+            step_status = "done" if verification_status in {"passed", "done", "success"} else "failed"
+            store.upsert_activity_step(
+                activity_id,
+                "verification",
+                status=step_status,
+                reason=verification.get("summary") or verification_status,
+                metadata=verification,
+            )
+
+    resolution_state = _normalize_resolution_state(runtime_result)
+    if resolution_state is None:
+        return
+
+    for index, checkpoint in enumerate(resolution_state["checkpoints"], start=1):
+        label = checkpoint.get("label") or checkpoint.get("id") or f"checkpoint-{index}"
+        step_key = f"checkpoint:{_slugify(str(label)) or index}"
+        checkpoint_status = checkpoint.get("status")
+        store.upsert_activity_step(
+            activity_id,
+            step_key,
+            status="done" if checkpoint_status not in {"failed", "error"} else "failed",
+            reason=checkpoint.get("summary") or str(label),
+            metadata=checkpoint,
+        )
 
 
 def _extract_activity_result_envelope(logs: list[dict]) -> ActivityResultEnvelope | None:

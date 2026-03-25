@@ -105,3 +105,26 @@ def test_mark_session_terminal_records_gc_timestamps(store):
     assert session["terminal_at"] == "2026-03-25T12:00:00+00:00"
     assert session["gc_eligible_at"] == "2026-03-25T12:00:00+00:00"
     assert session["gc_delete_after"] == "2026-04-01T12:00:00+00:00"
+
+
+def test_update_runtime_session_persists_resolution_state(store):
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    session_id = store.create_runtime_session(
+        repo_id="owner-repo",
+        entry_kind="fix_issue",
+        status="active",
+        worktree_path="/repos/.worktrees/owner-repo/session-memory",
+        branch_name="catocode/session/session-memory",
+        issue_number=42,
+    )
+
+    store.update_runtime_session(
+        session_id,
+        resolution_state='{"hypotheses":[{"id":"h1","summary":"Null guard","status":"active"}]}',
+    )
+
+    session = store.get_runtime_session(session_id)
+    assert session is not None
+    assert session["resolution_state"] == (
+        '{"hypotheses":[{"id":"h1","summary":"Null guard","status":"active"}]}'
+    )

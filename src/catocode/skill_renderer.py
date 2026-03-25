@@ -143,6 +143,8 @@ Follow the step-by-step workflow in this skill. Remember:
 3. Layer 1 evidence is MANDATORY before fixing
 4. Layer 2 evidence is MANDATORY before creating PR
 5. Include the Evidence table in your PR description
+6. Finish with a valid `ActivityResultEnvelope` JSON object as the final result text
+7. Include `writebacks`, `artifacts.verification`, and `artifacts.resolution` with hypotheses, todos, and checkpoints
 
 Begin now.
 """
@@ -469,6 +471,8 @@ Follow the analysis workflow in this skill:
 3. For bugs: analyze root cause and attempt reproduction
 4. Suggest 2-3 ranked solutions
 5. Post analysis comment with `/approve` instruction
+6. Finish with a valid `ActivityResultEnvelope` JSON object as the final result text
+7. Include `writebacks` plus structured findings in `artifacts`
 
 Begin now.
 """

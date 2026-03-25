@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
@@ -18,6 +18,7 @@ class ActivityEnvelope:
     event: dict[str, Any]
     runtime: dict[str, Any]
     observability: dict[str, Any]
+    memory: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -49,13 +50,37 @@ class ActivityResultEnvelope:
         if not isinstance(status, str) or not status.strip():
             raise InvalidActivityResultEnvelope("ActivityResultEnvelope.status must be a non-empty string")
 
+        session = payload["session"]
+        if not isinstance(session, dict):
+            raise InvalidActivityResultEnvelope("ActivityResultEnvelope.session must be an object")
+
+        writebacks = payload["writebacks"]
+        if isinstance(writebacks, dict):
+            normalized_writebacks = [dict(writebacks)]
+        elif isinstance(writebacks, list):
+            normalized_writebacks = []
+            for item in writebacks:
+                if not isinstance(item, dict):
+                    raise InvalidActivityResultEnvelope("ActivityResultEnvelope.writebacks items must be objects")
+                normalized_writebacks.append(dict(item))
+        else:
+            raise InvalidActivityResultEnvelope("ActivityResultEnvelope.writebacks must be a list")
+
+        artifacts = payload["artifacts"]
+        if not isinstance(artifacts, dict):
+            raise InvalidActivityResultEnvelope("ActivityResultEnvelope.artifacts must be an object")
+
+        metrics = payload["metrics"]
+        if not isinstance(metrics, dict):
+            raise InvalidActivityResultEnvelope("ActivityResultEnvelope.metrics must be an object")
+
         return cls(
             status=status,
             summary=summary,
-            session=dict(payload["session"]),
-            writebacks=list(payload["writebacks"]),
-            artifacts=dict(payload["artifacts"]),
-            metrics=dict(payload["metrics"]),
+            session=dict(session),
+            writebacks=normalized_writebacks,
+            artifacts=dict(artifacts),
+            metrics=dict(metrics),
         )
 
     def to_dict(self) -> dict[str, Any]:

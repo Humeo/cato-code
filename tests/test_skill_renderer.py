@@ -79,6 +79,8 @@ def test_build_fix_issue_prompt():
     assert "issue #123" in prompt
     assert "repository owner-repo" in prompt
     assert "Title: Test Issue" in prompt
+    assert "ActivityResultEnvelope" in prompt
+    assert "artifacts.resolution" in prompt
 
 
 def test_build_patrol_prompt():
@@ -176,6 +178,7 @@ def test_build_analyze_issue_prompt_has_no_preloaded_code_context_section():
         issue_data="Some issue",
     )
     assert "Pre-loaded Code Context" not in prompt
+    assert "ActivityResultEnvelope" in prompt
 
 
 def test_issue_skills_direct_agent_to_codebase_graph():

@@ -119,6 +119,16 @@ export function ActivityDetail({ activityId }: ActivityDetailProps) {
   const stage = activity.pipeline_stage ?? activity.status;
   const runtimeMetrics = activity.runtime_result?.metrics;
   const steps = activity.steps ?? [];
+  const sessionResolution = activity.runtime_session?.resolution_state;
+  const verificationArtifact =
+    activity.runtime_result?.artifacts && typeof activity.runtime_result.artifacts === "object"
+      ? (activity.runtime_result.artifacts.verification as Record<string, unknown> | undefined)
+      : undefined;
+  const resolutionArtifact =
+    activity.runtime_result?.artifacts && typeof activity.runtime_result.artifacts === "object"
+      ? (activity.runtime_result.artifacts.resolution as Record<string, unknown> | undefined)
+      : undefined;
+  const writebacks = activity.runtime_result?.writebacks ?? [];
 
   const formatDuration = (durationMs: number | null | undefined) => {
     if (durationMs == null) return "—";
@@ -276,6 +286,16 @@ export function ActivityDetail({ activityId }: ActivityDetailProps) {
                       <dd className="text-gray-300">{activity.runtime_session.gc_status ?? "—"}</dd>
                     </div>
                   </div>
+                  {sessionResolution && (
+                    <div className="pt-2">
+                      <dt className="text-gray-600">Resolution Memory</dt>
+                      <dd className="mt-1 grid grid-cols-3 gap-3 text-gray-300">
+                        <span>{sessionResolution.hypotheses?.length ?? 0} hypotheses</span>
+                        <span>{sessionResolution.todos?.length ?? 0} todos</span>
+                        <span>{sessionResolution.checkpoints?.length ?? 0} checkpoints</span>
+                      </dd>
+                    </div>
+                  )}
                 </dl>
               </div>
             )}
@@ -297,6 +317,36 @@ export function ActivityDetail({ activityId }: ActivityDetailProps) {
                       <span>{formatDuration(runtimeMetrics?.duration_ms)}</span>
                     </div>
                   </div>
+                  {verificationArtifact && (
+                    <div className="rounded-lg border border-white/5 bg-black/20 px-3 py-2">
+                      <span className="block text-gray-600">Verification</span>
+                      <span className="text-gray-200">
+                        {String(verificationArtifact.summary ?? verificationArtifact.status ?? "Recorded")}
+                      </span>
+                    </div>
+                  )}
+                  {writebacks.length > 0 && (
+                    <div className="rounded-lg border border-white/5 bg-black/20 px-3 py-2">
+                      <span className="block text-gray-600">Writebacks</span>
+                      <div className="mt-2 space-y-1">
+                        {writebacks.map((writeback, index) => (
+                          <div key={`${String(writeback.kind ?? "writeback")}-${index}`} className="text-gray-200">
+                            {String(writeback.kind ?? "writeback")} · {String(writeback.status ?? "done")}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {resolutionArtifact && (
+                    <div className="rounded-lg border border-white/5 bg-black/20 px-3 py-2">
+                      <span className="block text-gray-600">Resolution Snapshot</span>
+                      <div className="mt-2 grid grid-cols-3 gap-2 text-gray-200">
+                        <span>{Array.isArray(resolutionArtifact.hypotheses) ? resolutionArtifact.hypotheses.length : 0} hypotheses</span>
+                        <span>{Array.isArray(resolutionArtifact.todos) ? resolutionArtifact.todos.length : 0} todos</span>
+                        <span>{Array.isArray(resolutionArtifact.checkpoints) ? resolutionArtifact.checkpoints.length : 0} checkpoints</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

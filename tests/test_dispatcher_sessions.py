@@ -85,6 +85,16 @@ async def test_dispatch_fix_issue_uses_runtime_session_worktree_and_persists_sdk
         issue_number=42,
         sdk_session_id="sdk-old",
     )
+    store.update_runtime_session(
+        runtime_session_id,
+        resolution_state=json.dumps(
+            {
+                "hypotheses": [{"id": "h1", "summary": "Validate empty token input", "status": "active"}],
+                "todos": [{"id": "t1", "content": "Reproduce with empty input", "status": "done"}],
+                "checkpoints": [{"id": "c1", "label": "before-fix", "status": "done"}],
+            }
+        ),
+    )
     activity_id = store.add_activity("owner-repo", "fix_issue", "issue:42")
     store.update_activity(activity_id, session_id=runtime_session_id)
     container_mgr = SessionAwareContainerManager("/repos/.worktrees/owner-repo/runtime-session-1")
@@ -102,12 +112,22 @@ async def test_dispatch_fix_issue_uses_runtime_session_worktree_and_persists_sdk
     async def fake_execute_sdk_runner(**kwargs):
         assert kwargs["cwd"] == "/repos/.worktrees/owner-repo/runtime-session-1"
         assert kwargs["session_id"] == "sdk-old"
+        assert '"memory"' in kwargs["prompt"]
+        assert '"Validate empty token input"' in kwargs["prompt"]
         result = ActivityResultEnvelope(
             status="done",
             summary="Fixed issue 42 and verified the regression.",
             session={"sdk_session_id": "sdk-new", "continued": True},
-            writebacks={"issue_comment_url": None, "pr_url": None, "commit_sha": None},
-            artifacts={"decision": {"kind": "fix_issue"}, "verification": {"status": "passed"}},
+            writebacks=[{"kind": "pr_opened", "target": "pr", "status": "done", "url": "https://github.com/owner/repo/pull/42"}],
+            artifacts={
+                "decision": {"kind": "fix_issue"},
+                "verification": {"status": "passed", "summary": "pytest tests/test_token.py::test_empty_input"},
+                "resolution": {
+                    "hypotheses": [{"id": "h1", "summary": "Validate empty token input", "status": "confirmed"}],
+                    "todos": [{"id": "t2", "content": "Run regression suite", "status": "done"}],
+                    "checkpoints": [{"id": "c2", "label": "verified-fix", "status": "done", "commit_sha": "abc123"}],
+                },
+            },
             metrics={"cost_usd": 0.5, "duration_ms": 1000, "turns": 4},
         )
         store.add_log(
@@ -144,6 +164,7 @@ async def test_dispatch_fix_issue_uses_runtime_session_worktree_and_persists_sdk
     assert runtime_session is not None
     assert runtime_session["sdk_session_id"] == "sdk-new"
     assert runtime_session["last_activity_at"] is not None
+    assert '"confirmed"' in runtime_session["resolution_state"]
 
     assert container_mgr.ensure_session_worktree_calls == [
         ("owner-repo", "https://github.com/owner/repo", runtime_session_id)

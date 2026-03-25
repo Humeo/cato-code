@@ -37,6 +37,13 @@ def test_activity_envelope_serializes_issue_activity():
         event={"source": "github", "name": "issues", "action": "opened", "payload": {"number": 42}},
         runtime={"entrypoint": "fix_issue", "model": "claude", "max_turns": 200, "allowed_tools": ["Bash"]},
         observability={"repo_id": "owner-repo", "activity_id": "activity-123", "session_id": "session-123"},
+        memory={
+            "resolution": {
+                "hypotheses": [{"id": "h1", "summary": "Input sanitation bug", "status": "active"}],
+                "todos": [{"id": "t1", "content": "Add failing regression test", "status": "pending"}],
+                "checkpoints": [],
+            }
+        },
     )
 
     payload = envelope.to_dict()
@@ -44,6 +51,7 @@ def test_activity_envelope_serializes_issue_activity():
     assert payload["repo"]["worktree_path"] == "/repos/.worktrees/owner-repo/session-123"
     assert payload["session"]["sdk_session_id"] == "sdk-123"
     assert payload["targets"]["issue_number"] == 42
+    assert payload["memory"]["resolution"]["hypotheses"][0]["id"] == "h1"
 
 
 def test_activity_result_envelope_validates_required_fields():

@@ -195,6 +195,7 @@ CREATE TABLE IF NOT EXISTS runtime_sessions (
     status TEXT NOT NULL,
     worktree_path TEXT NOT NULL,
     branch_name TEXT NOT NULL,
+    resolution_state TEXT,
     fork_from_session_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -276,6 +277,7 @@ WHERE kind = 'refresh_repo_memory_review' AND status IN ('pending', 'running')""
     status TEXT NOT NULL,
     worktree_path TEXT NOT NULL,
     branch_name TEXT NOT NULL,
+    resolution_state TEXT,
     fork_from_session_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -306,6 +308,7 @@ WHERE kind = 'refresh_repo_memory_review' AND status IN ('pending', 'running')""
     "CREATE INDEX IF NOT EXISTS idx_runtime_session_issue_repo_issue ON runtime_session_issue_links(repo_id, issue_number, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_runtime_session_pr_repo_pr ON runtime_session_pr_links(repo_id, pr_number, created_at)",
     "ALTER TABLE runtime_sessions ADD COLUMN gc_error TEXT",
+    "ALTER TABLE runtime_sessions ADD COLUMN resolution_state TEXT",
     "ALTER TABLE runtime_session_pr_links ADD COLUMN pr_state TEXT NOT NULL DEFAULT 'open'",
 ]
 
@@ -678,9 +681,9 @@ class Store:
         self._db.execute(
             """INSERT INTO runtime_sessions (
                    id, repo_id, sdk_session_id, entry_kind, status, worktree_path,
-                   branch_name, fork_from_session_id, created_at, updated_at,
+                   branch_name, resolution_state, fork_from_session_id, created_at, updated_at,
                    last_activity_at, terminal_at, gc_eligible_at, gc_delete_after, gc_status, gc_error
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL)""",
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL)""",
             (
                 session_id,
                 repo_id,
