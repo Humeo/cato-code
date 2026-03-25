@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from ..config import get_github_app_name
 from ..store import Store
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,11 @@ def make_router(store: Store) -> APIRouter:
     @router.get("/stats")
     async def get_stats() -> dict:
         return store.get_stats()
+
+    @router.get("/install-url")
+    async def get_install_url() -> dict:
+        app_name = get_github_app_name()
+        return {"url": f"https://github.com/apps/{app_name}/installations/new"}
 
     @router.get("/repos")
     async def list_repos() -> list[dict]:

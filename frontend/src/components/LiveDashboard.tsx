@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import type { Stats, Activity, Repo } from "@/lib/types";
-import { getStats, getActivities, getRepos } from "@/lib/api";
+import { getInstallUrl, getStats, getActivities, getRepos } from "@/lib/api";
 import { StatCard } from "@/components/StatCard";
 import { RepoList } from "@/components/RepoList";
 import { GroupedActivityTable } from "@/components/GroupedActivityTable";
@@ -17,6 +17,7 @@ export function LiveDashboard({ initialStats, initialActivities, initialRepos }:
   const [stats, setStats] = useState<Stats | null>(initialStats);
   const [activities, setActivities] = useState<Activity[]>(initialActivities);
   const [repos, setRepos] = useState<Repo[]>(initialRepos);
+  const [installing, setInstalling] = useState(false);
 
   const refresh = useCallback(async () => {
     const [newStats, newActivities, newRepos] = await Promise.all([
@@ -35,6 +36,15 @@ export function LiveDashboard({ initialStats, initialActivities, initialRepos }:
   }, [refresh]);
 
   const displayActivities = stats?.recent_activities ?? activities;
+
+  const handleInstallApp = useCallback(async () => {
+    setInstalling(true);
+    const url = await getInstallUrl();
+    setInstalling(false);
+    if (url) {
+      window.location.href = url;
+    }
+  }, []);
 
   return (
     <>
@@ -73,9 +83,16 @@ export function LiveDashboard({ initialStats, initialActivities, initialRepos }:
             <span className="w-1.5 h-1.5 rounded-full bg-accent" />
             Watched Repositories
           </h2>
-          <span className="text-xs text-gray-600">
-            {repos.length} repos
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-gray-600">{repos.length} repos</span>
+            <button
+              onClick={handleInstallApp}
+              disabled={installing}
+              className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-[11px] font-medium text-cyan-200 transition hover:bg-cyan-400/20 disabled:opacity-50"
+            >
+              {installing ? "Opening…" : "Install App"}
+            </button>
+          </div>
         </div>
         <RepoList repos={repos} />
       </section>

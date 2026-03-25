@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import { deleteRepo, retrySetup, updatePatrolSettings, triggerPatrol } from "@/lib/api";
+import { deleteRepo, getInstallUrl, retrySetup, updatePatrolSettings, triggerPatrol } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import type { Repo } from "@/lib/types";
 
@@ -136,6 +136,15 @@ export function RepoList({ repos: initialRepos }: RepoListProps) {
   const [error, setError] = useState<string | null>(null);
   const [expandedPatrol, setExpandedPatrol] = useState<string | null>(null);
 
+  const handleInstallApp = useCallback(async () => {
+    const url = await getInstallUrl();
+    if (!url) {
+      setError("Failed to fetch install URL.");
+      return;
+    }
+    window.location.href = url;
+  }, []);
+
   const handleRetrySetup = useCallback(async (repoId: string) => {
     setRetryingRepoId(repoId);
     setError(null);
@@ -184,9 +193,26 @@ export function RepoList({ repos: initialRepos }: RepoListProps) {
 
   if (!repos.length) {
     return (
-      <div className="flex flex-col items-center justify-center py-8 text-gray-600">
-        <span className="text-2xl mb-2">📭</span>
-        <p className="text-sm">No repositories yet.</p>
+      <div className="rounded-2xl border border-white/8 bg-black/20 px-6 py-8 text-center">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-400/20 bg-cyan-400/10 text-cyan-300">
+          <span className="text-xl">+</span>
+        </div>
+        <p className="text-sm font-medium text-gray-200">No repositories connected yet.</p>
+        <p className="mx-auto mt-2 max-w-md text-xs leading-6 text-gray-500">
+          Install the GitHub App to watch repositories from the dashboard, or use
+          `catocode watch &lt;repo-url&gt;` for manual setup.
+        </p>
+        <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+          <button
+            onClick={handleInstallApp}
+            className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-4 py-2 text-xs font-medium text-cyan-200 transition hover:bg-cyan-400/20"
+          >
+            Install App
+          </button>
+          <span className="rounded-full border border-white/6 bg-white/5 px-4 py-2 font-mono text-[11px] text-gray-400">
+            catocode watch https://github.com/owner/repo
+          </span>
+        </div>
       </div>
     );
   }

@@ -214,3 +214,11 @@ def test_api_health(tmp_path):
     resp = client.get("/webhook/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+def test_api_install_url_available_in_dashboard_mode(tmp_path):
+    client, _ = _make_client(tmp_path)
+    resp = client.get("/api/install-url")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["url"].startswith("https://github.com/apps/")

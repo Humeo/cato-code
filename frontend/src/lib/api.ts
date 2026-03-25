@@ -27,6 +27,11 @@ export async function getStats(): Promise<Stats | null> {
   return apiFetch<Stats>("/api/stats");
 }
 
+export async function getInstallUrl(): Promise<string | null> {
+  const data = await apiFetch<{ url: string }>("/api/install-url");
+  return data?.url ?? null;
+}
+
 export async function getRepos(): Promise<Repo[] | null> {
   return apiFetch<Repo[]>("/api/repos");
 }
