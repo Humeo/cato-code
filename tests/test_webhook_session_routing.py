@@ -144,3 +144,51 @@ def test_merged_pr_refresh_creates_dedicated_runtime_session(tmp_path):
     assert session["entry_kind"] == "refresh_repo_memory_review"
     assert session["worktree_path"] == "/repos/.worktrees/owner-repo/" + session["id"]
     assert store.find_pr_runtime_session("owner-repo", 42)["id"] == session["id"]
+
+
+def test_issue_approve_after_analysis_queues_fix_issue_on_same_runtime_session(tmp_path, monkeypatch):
+    store = Store(db_path=tmp_path / "test.db")
+    _seed_repo(store)
+    client = _make_client(store)
+
+    issue_session_id = store.create_runtime_session(
+        repo_id="owner-repo",
+        entry_kind="analyze_issue",
+        status="active",
+        worktree_path="/repos/.worktrees/owner-repo/session-issue-42",
+        branch_name="catocode/session/session-issue-42",
+        issue_number=42,
+    )
+    analyze_activity_id = store.add_activity("owner-repo", "analyze_issue", "issue:42")
+    store.update_activity(analyze_activity_id, session_id=issue_session_id, status="done", summary="analysis posted")
+
+    async def fake_check_user_is_admin(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr("catocode.decision.check_user_is_admin", fake_check_user_is_admin)
+
+    payload = {
+        "action": "created",
+        "issue": {"number": 42},
+        "comment": {"id": 333, "body": "/approve", "html_url": "https://github.com/owner/repo/issues/42#issuecomment-333"},
+        "repository": {"html_url": "https://github.com/owner/repo"},
+        "sender": {"login": "maintainer"},
+    }
+
+    resp = client.post(
+        "/webhook/github/owner-repo",
+        content=json.dumps(payload).encode(),
+        headers={
+            "X-GitHub-Event": "issue_comment",
+            "X-GitHub-Delivery": "delivery-approve-fix-42",
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert resp.status_code == 200
+    activities = store.list_activities("owner-repo")
+    assert [activity["kind"] for activity in activities] == ["analyze_issue", "fix_issue"]
+    fix_activity = activities[-1]
+    assert fix_activity["trigger"] == "issue:42"
+    assert fix_activity["status"] == "pending"
+    assert fix_activity["session_id"] == issue_session_id

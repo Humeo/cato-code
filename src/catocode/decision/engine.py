@@ -119,6 +119,28 @@ async def decide_engagement(
                             reason=f"Admin approval detected for {activity['kind']}",
                         )
 
+                if trigger_parts[0] == "issue":
+                    activities = store.list_activities(repo_id)
+                    has_completed_analysis = any(
+                        activity["kind"] == "analyze_issue"
+                        and activity["status"] == "done"
+                        and approval_scope_from_trigger(activity.get("trigger")) == issue_or_pr
+                        for activity in activities
+                    )
+                    has_inflight_fix = any(
+                        activity["kind"] == "fix_issue"
+                        and activity["status"] in ("pending", "running")
+                        and approval_scope_from_trigger(activity.get("trigger")) == issue_or_pr
+                        for activity in activities
+                    )
+                    if has_completed_analysis and not has_inflight_fix:
+                        return EngagementDecision(
+                            should_engage=True,
+                            activity_kind="approve_activity",
+                            requires_approval=False,
+                            reason="Admin approval detected for analyzed issue fix",
+                        )
+
         # Check for @catocode mention (general task request)
         if "@catocode" in comment_lower:
             return EngagementDecision(

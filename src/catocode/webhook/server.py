@@ -246,10 +246,6 @@ class WebhookServer:
                 matching_activity = activity
                 break
 
-        if matching_activity is None:
-            logger.warning("No pending approval activity found for: %s", issue_or_pr)
-            return
-
         comment_author = event.actor
         repo = self._store.get_repo(event.repo_id)
         if repo is None:
@@ -270,14 +266,58 @@ class WebhookServer:
             return
 
         comment_url = payload.get("comment", {}).get("html_url", "")
+        if matching_activity is not None:
+            self._store.update_activity(
+                matching_activity["id"],
+                status="pending",
+                requires_approval=0,
+                approved_by=comment_author,
+                approval_comment_url=comment_url,
+            )
+            logger.info("Activity %s approved by %s", matching_activity["id"][:8], comment_author)
+            return
+
+        if issue_or_pr.startswith("issue:"):
+            self._queue_issue_fix_after_approval(event.repo_id, issue_or_pr, comment_author, comment_url)
+            return
+
+        logger.warning("No pending approval activity found for: %s", issue_or_pr)
+
+    def _queue_issue_fix_after_approval(
+        self,
+        repo_id: str,
+        issue_trigger: str,
+        approved_by: str,
+        comment_url: str,
+    ) -> None:
+        if self._store.has_inflight_activity(repo_id, "fix_issue", issue_trigger):
+            logger.info("Skipped duplicate fix_issue queue for %s", issue_trigger)
+            return
+
+        issue_session_id: str | None = None
+        has_completed_analysis = False
+        for activity in reversed(self._store.list_activities(repo_id=repo_id)):
+            if approval_scope_from_trigger(activity.get("trigger")) != issue_trigger:
+                continue
+            if activity["kind"] == "analyze_issue" and activity["status"] == "done":
+                has_completed_analysis = True
+                issue_session_id = activity.get("session_id")
+                break
+
+        if not has_completed_analysis:
+            logger.warning("Approval received for %s but no completed analyze_issue found", issue_trigger)
+            return
+
+        fix_activity_id = self._store.add_activity(repo_id, "fix_issue", issue_trigger)
+        if issue_session_id:
+            self._store.update_activity(fix_activity_id, session_id=issue_session_id)
         self._store.update_activity(
-            matching_activity["id"],
-            status="pending",
-            requires_approval=0,
-            approved_by=comment_author,
+            fix_activity_id,
+            approved_by=approved_by,
             approval_comment_url=comment_url,
         )
-        logger.info("Activity %s approved by %s", matching_activity["id"][:8], comment_author)
+        self._attach_runtime_session(fix_activity_id)
+        logger.info("Queued fix_issue %s after approval for %s", fix_activity_id[:8], issue_trigger)
 
     async def _handle_app_webhook(
         self,
