@@ -14,6 +14,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T | null> 
   try {
     const res = await fetch(`${getBaseUrl()}${path}`, {
       cache: "no-store",
+      credentials: "include",
       ...init,
     });
     if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
@@ -42,7 +43,7 @@ export async function getActivities(): Promise<Activity[] | null> {
 
 export async function deleteRepo(repoId: string): Promise<boolean> {
   try {
-    const res = await fetch(`${API_URL}/api/repos/${repoId}`, { method: "DELETE" });
+    const res = await fetch(`${API_URL}/api/repos/${repoId}`, { method: "DELETE", credentials: "include" });
     return res.ok;
   } catch {
     return false;
@@ -53,7 +54,7 @@ export async function retrySetup(
   repoId: string
 ): Promise<{ activity_id: string } | { error: string } | null> {
   try {
-    const res = await fetch(`${API_URL}/api/repos/${repoId}/setup/retry`, { method: "POST" });
+    const res = await fetch(`${API_URL}/api/repos/${repoId}/setup/retry`, { method: "POST", credentials: "include" });
     if (!res.ok) {
       try {
         const body = await res.json();
@@ -96,6 +97,7 @@ export async function updatePatrolSettings(
   try {
     const res = await fetch(`${API_URL}/api/repos/${repoId}/patrol`, {
       method: "PATCH",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),
     });
@@ -109,7 +111,7 @@ export async function triggerPatrol(
   repoId: string
 ): Promise<{ activity_id: string } | { error: string } | null> {
   try {
-    const res = await fetch(`${API_URL}/api/repos/${repoId}/patrol/trigger`, { method: "POST" });
+    const res = await fetch(`${API_URL}/api/repos/${repoId}/patrol/trigger`, { method: "POST", credentials: "include" });
     if (!res.ok) {
       try {
         const body = await res.json();

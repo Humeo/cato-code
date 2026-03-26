@@ -11,7 +11,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from ..config import get_github_app_name, parse_repo_url
+from ..github.permissions import check_repo_write_access
 from ..store import Store
+from .crypto import decrypt_token
 from .deps import CurrentUser
 
 logger = logging.getLogger(__name__)
@@ -81,6 +84,76 @@ def _find_reusable_setup_activity(store: Store, repo_id: str) -> dict | None:
     return None
 
 
+def _get_user_github_token(current_user: dict) -> str:
+    encrypted = current_user.get("access_token")
+    if not encrypted:
+        raise HTTPException(status_code=401, detail="GitHub login expired")
+    try:
+        return decrypt_token(encrypted)
+    except Exception as exc:  # pragma: no cover - defensive path
+        logger.warning("Failed to decrypt GitHub token for user %s: %s", current_user.get("id"), exc)
+        raise HTTPException(status_code=401, detail="GitHub login expired") from exc
+
+
+async def _can_manage_repo(repo: dict, current_user: dict) -> bool:
+    if not repo.get("installation_id"):
+        return False
+    try:
+        owner, repo_name = parse_repo_url(repo["repo_url"])
+    except Exception:
+        logger.warning("Skipping repo with invalid URL in dashboard: %s", repo.get("id"))
+        return False
+    github_token = _get_user_github_token(current_user)
+    has_access, _reason = await check_repo_write_access(owner, repo_name, github_token)
+    return has_access
+
+
+async def _list_visible_repos(store: Store, current_user: dict) -> list[dict]:
+    visible: list[dict] = []
+    for repo in store.list_repos():
+        if await _can_manage_repo(repo, current_user):
+            visible.append(dict(repo))
+    return visible
+
+
+async def _require_visible_repo(store: Store, repo_id: str, current_user: dict) -> dict:
+    repo = store.get_repo(repo_id)
+    if repo is None:
+        raise HTTPException(status_code=404, detail="Repo not found")
+    if not await _can_manage_repo(repo, current_user):
+        raise HTTPException(status_code=403, detail="Access denied")
+    return repo
+
+
+def _build_stats_payload(store: Store, visible_repos: list[dict]) -> dict:
+    repo_ids = {repo["id"] for repo in visible_repos}
+    activities = [activity for activity in store.list_activities() if activity["repo_id"] in repo_ids]
+    by_status: dict[str, int] = {}
+    by_kind: dict[str, int] = {}
+    total_cost = 0.0
+    for activity in activities:
+        status = activity["status"]
+        kind = activity["kind"]
+        by_status[status] = by_status.get(status, 0) + 1
+        by_kind[kind] = by_kind.get(kind, 0) + 1
+        total_cost += activity.get("cost_usd") or 0.0
+
+    recent_activities = sorted(activities, key=lambda item: item["updated_at"], reverse=True)[:20]
+    return {
+        "repos": {
+            "total": len(visible_repos),
+            "watched": sum(1 for repo in visible_repos if repo.get("watch")),
+        },
+        "activities": {
+            "by_status": by_status,
+            "by_kind": by_kind,
+            "total": len(activities),
+        },
+        "cost_usd": round(total_cost, 4),
+        "recent_activities": [_serialize_activity(activity, store) for activity in recent_activities],
+    }
+
+
 def make_router(store: Store) -> APIRouter:
     """Return an APIRouter with the store injected via closure."""
     r = APIRouter(tags=["api"])
@@ -98,20 +171,19 @@ def make_router(store: Store) -> APIRouter:
 
     @r.get("/stats")
     async def get_stats(current_user: CurrentUser) -> dict:
-        return store.get_stats(user_id=current_user["id"])
+        repos = await _list_visible_repos(store, current_user)
+        return _build_stats_payload(store, repos)
 
     @r.get("/repos")
     async def list_repos(current_user: CurrentUser) -> list[dict]:
-        return [dict(r) for r in store.list_repos(user_id=current_user["id"])]
+        return await _list_visible_repos(store, current_user)
 
     @r.get("/repos/{repo_id}")
     async def get_repo_stats(repo_id: str, current_user: CurrentUser) -> dict:
+        await _require_visible_repo(store, repo_id, current_user)
         stats = store.get_repo_stats(repo_id)
         if stats is None:
             raise HTTPException(status_code=404, detail="Repo not found")
-        # Ownership check
-        if stats["repo"].get("user_id") != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Access denied")
         stats["runtime_sessions"] = [_serialize_runtime_session(store, session) for session in store.list_repo_runtime_sessions(repo_id)]
         last_setup_activity_id = stats["repo"].get("last_setup_activity_id")
         stats["last_setup_activity"] = (
@@ -123,11 +195,7 @@ def make_router(store: Store) -> APIRouter:
 
     @r.post("/repos/{repo_id}/setup/retry")
     async def retry_setup(repo_id: str, current_user: CurrentUser) -> dict:
-        repo = store.get_repo(repo_id)
-        if repo is None:
-            raise HTTPException(status_code=404, detail="Repo not found")
-        if repo.get("user_id") != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Access denied")
+        await _require_visible_repo(store, repo_id, current_user)
 
         setup_activity = _find_reusable_setup_activity(store, repo_id)
         if setup_activity is None:
@@ -145,25 +213,21 @@ def make_router(store: Store) -> APIRouter:
 
     @r.get("/repos/{repo_id}/activities")
     async def list_repo_activities(repo_id: str, current_user: CurrentUser) -> list[dict]:
-        repo = store.get_repo(repo_id)
-        if repo is None:
-            raise HTTPException(status_code=404, detail="Repo not found")
-        if repo.get("user_id") != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Access denied")
+        await _require_visible_repo(store, repo_id, current_user)
         return [_serialize_activity(a, store) for a in store.list_activities(repo_id=repo_id)]
 
     @r.get("/activities")
     async def list_activities(current_user: CurrentUser) -> list[dict]:
-        return [_serialize_activity(a, store) for a in store.list_activities(user_id=current_user["id"])]
+        repo_ids = {repo["id"] for repo in await _list_visible_repos(store, current_user)}
+        activities = [activity for activity in store.list_activities() if activity["repo_id"] in repo_ids]
+        return [_serialize_activity(a, store) for a in activities]
 
     @r.get("/activities/{activity_id}")
     async def get_activity(activity_id: str, current_user: CurrentUser) -> dict:
         activity = store.get_activity(activity_id)
         if activity is None:
             raise HTTPException(status_code=404, detail="Activity not found")
-        repo = store.get_repo(activity["repo_id"])
-        if repo is None or repo.get("user_id") != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Access denied")
+        await _require_visible_repo(store, activity["repo_id"], current_user)
         return _serialize_activity(activity, store, include_detail=True)
 
     @r.get("/activities/{activity_id}/logs")
@@ -171,9 +235,7 @@ def make_router(store: Store) -> APIRouter:
         activity = store.get_activity(activity_id)
         if activity is None:
             raise HTTPException(status_code=404, detail="Activity not found")
-        repo = store.get_repo(activity["repo_id"])
-        if repo is None or repo.get("user_id") != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Access denied")
+        await _require_visible_repo(store, activity["repo_id"], current_user)
         return [dict(log) for log in store.get_logs(activity_id)]
 
     @r.get("/activities/{activity_id}/logs/stream")
@@ -182,9 +244,7 @@ def make_router(store: Store) -> APIRouter:
         activity = store.get_activity(activity_id)
         if activity is None:
             raise HTTPException(status_code=404, detail="Activity not found")
-        repo = store.get_repo(activity["repo_id"])
-        if repo is None or repo.get("user_id") != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Access denied")
+        await _require_visible_repo(store, activity["repo_id"], current_user)
 
         _SSE_TIMEOUT_SECONDS = 30 * 60  # 30 minutes max
 
@@ -215,18 +275,13 @@ def make_router(store: Store) -> APIRouter:
 
     @r.delete("/repos/{repo_id}")
     async def delete_repo(repo_id: str, current_user: CurrentUser) -> dict:
-        repo = store.get_repo(repo_id)
-        if repo is None:
-            raise HTTPException(status_code=404, detail="Repo not found")
-        if repo.get("user_id") != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Access denied")
+        await _require_visible_repo(store, repo_id, current_user)
         store.delete_repo(repo_id)
         logger.info("User %s deleted repo %s", current_user["id"][:8], repo_id)
         return {"status": "deleted"}
 
     @r.get("/install-url")
     async def get_install_url(current_user: CurrentUser) -> dict:
-        from ..config import get_github_app_name
         app_name = get_github_app_name()
         # Generate a random CSRF nonce that maps to the current user
         state = secrets.token_hex(32)
@@ -240,11 +295,7 @@ def make_router(store: Store) -> APIRouter:
     async def update_patrol_settings(
         repo_id: str, settings: PatrolSettings, current_user: CurrentUser
     ) -> dict:
-        repo = store.get_repo(repo_id)
-        if repo is None:
-            raise HTTPException(status_code=404, detail="Repo not found")
-        if repo.get("user_id") != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Access denied")
+        await _require_visible_repo(store, repo_id, current_user)
         store.update_patrol_settings(
             repo_id=repo_id,
             enabled=settings.patrol_enabled,
@@ -262,11 +313,7 @@ def make_router(store: Store) -> APIRouter:
 
     @r.post("/repos/{repo_id}/patrol/trigger")
     async def trigger_patrol(repo_id: str, current_user: CurrentUser) -> dict:
-        repo = store.get_repo(repo_id)
-        if repo is None:
-            raise HTTPException(status_code=404, detail="Repo not found")
-        if repo.get("user_id") != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Access denied")
+        repo = await _require_visible_repo(store, repo_id, current_user)
 
         # Ensure budget row exists for this repo
         max_issues = repo.get("patrol_max_issues") or 5
@@ -286,11 +333,7 @@ def make_router(store: Store) -> APIRouter:
 
     @r.get("/repos/{repo_id}/patrol/status")
     async def get_patrol_status(repo_id: str, current_user: CurrentUser) -> dict:
-        repo = store.get_repo(repo_id)
-        if repo is None:
-            raise HTTPException(status_code=404, detail="Repo not found")
-        if repo.get("user_id") != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Access denied")
+        repo = await _require_visible_repo(store, repo_id, current_user)
 
         budget = store.get_patrol_budget(repo_id)
 

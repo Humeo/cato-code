@@ -21,9 +21,7 @@ def create_app(store: Store, auth: Auth | None = None) -> FastAPI:
     Serves:
     - /auth/*           — GitHub OAuth flow
     - /api/*            — Protected REST API (session-guarded)
-    - /webhook/github/* — Per-repo webhooks
-    - /webhook/app      — GitHub App-level webhook
-    - /webhook/health   — Health check
+    - /webhook/*        — GitHub webhook and health routes
     - /health           — Top-level health check
     """
     from ..webhook.server import WebhookServer
@@ -56,7 +54,7 @@ def create_app(store: Store, auth: Auth | None = None) -> FastAPI:
     api_router = make_api_router(store)
     app.include_router(api_router, prefix="/api")
 
-    # Webhook server (includes /webhook/* routes + unauthenticated dashboard API)
+    # Webhook server (webhooks only; dashboard data stays under protected /api/*)
     _auth = auth or get_auth()
     webhook_server = WebhookServer(store=store, auth=_auth)
     app.mount("/", webhook_server.app)

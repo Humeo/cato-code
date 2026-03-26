@@ -1,29 +1,57 @@
-"""Tests for the dashboard API."""
+"""Tests for the protected SaaS dashboard API."""
 
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+from catocode.api.app import create_app
+from catocode.api.crypto import encrypt_token
 from catocode.auth.token import TokenAuth
 from catocode.store import Store
-from catocode.webhook.server import WebhookServer
 
 
 def _make_client(tmp_path: Path) -> tuple[TestClient, Store]:
+    import os
+
+    os.environ.setdefault("SESSION_SECRET_KEY", "0" * 64)
     store = Store(db_path=tmp_path / "test.db")
     auth = TokenAuth("ghp_test")
-    server = WebhookServer(store, auth=auth)
-    return TestClient(server.app), store
+    app = create_app(store=store, auth=auth)
+    store.create_user(
+        user_id="user-1",
+        github_id=1,
+        github_login="octocat",
+        github_email="octocat@example.com",
+        avatar_url=None,
+        access_token=encrypt_token("ghu_user_token"),
+    )
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    store.create_session("session-1", "user-1", expires_at)
+    client = TestClient(app)
+    client.cookies.set("session", "session-1")
+    return client, store
 
 
 def test_root_path_not_exposed(tmp_path):
     client, _ = _make_client(tmp_path)
     resp = client.get("/")
     assert resp.status_code == 404
+
+
+def test_api_requires_authentication(tmp_path):
+    store = Store(db_path=tmp_path / "test.db")
+    app = create_app(store=store, auth=TokenAuth("ghp_test"))
+    client = TestClient(app)
+
+    resp = client.get("/api/stats")
+
+    assert resp.status_code == 401
 
 
 def test_api_stats_empty(tmp_path):
@@ -41,13 +69,14 @@ def test_api_stats_with_data(tmp_path):
     client, store = _make_client(tmp_path)
 
     store.add_repo("owner-repo", "https://github.com/owner/repo")
-    store.update_repo("owner-repo", watch=1)
+    store.update_repo("owner-repo", watch=1, installation_id="111")
     a1 = store.add_activity("owner-repo", "analyze_issue", "issue:1")
     store.update_activity(a1, status="done", cost_usd=0.05)
     a2 = store.add_activity("owner-repo", "review_pr", "pr:2")
     store.update_activity(a2, status="failed", cost_usd=0.02)
 
-    resp = client.get("/api/stats")
+    with patch("catocode.api.routes.check_repo_write_access", return_value=(True, "write")):
+        resp = client.get("/api/stats")
     assert resp.status_code == 200
     data = resp.json()
     assert data["repos"]["watched"] == 1
@@ -61,8 +90,10 @@ def test_api_stats_with_data(tmp_path):
 def test_api_repos(tmp_path):
     client, store = _make_client(tmp_path)
     store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo("owner-repo", installation_id="111")
 
-    resp = client.get("/api/repos")
+    with patch("catocode.api.routes.check_repo_write_access", return_value=(True, "write")):
+        resp = client.get("/api/repos")
     assert resp.status_code == 200
     repos = resp.json()
     assert len(repos) == 1
@@ -72,10 +103,12 @@ def test_api_repos(tmp_path):
 def test_api_repo_stats(tmp_path):
     client, store = _make_client(tmp_path)
     store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo("owner-repo", installation_id="111")
     a1 = store.add_activity("owner-repo", "fix_issue", "issue:10")
     store.update_activity(a1, status="done", cost_usd=0.10)
 
-    resp = client.get("/api/repos/owner-repo")
+    with patch("catocode.api.routes.check_repo_write_access", return_value=(True, "write")):
+        resp = client.get("/api/repos/owner-repo")
     assert resp.status_code == 200
     data = resp.json()
     assert data["cost_usd"] == pytest.approx(0.10, abs=0.001)
@@ -85,6 +118,7 @@ def test_api_repo_stats(tmp_path):
 def test_api_repo_stats_include_runtime_sessions_and_lifecycle(tmp_path):
     client, store = _make_client(tmp_path)
     store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo("owner-repo", installation_id="111")
     setup_id = store.add_activity("owner-repo", "setup", "watch")
     store.update_activity(setup_id, status="failed", summary="cg index failed")
     store.update_repo_lifecycle(
@@ -102,7 +136,8 @@ def test_api_repo_stats_include_runtime_sessions_and_lifecycle(tmp_path):
         issue_number=42,
     )
 
-    resp = client.get("/api/repos/owner-repo")
+    with patch("catocode.api.routes.check_repo_write_access", return_value=(True, "write")):
+        resp = client.get("/api/repos/owner-repo")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -123,9 +158,11 @@ def test_api_repo_not_found(tmp_path):
 def test_api_activities(tmp_path):
     client, store = _make_client(tmp_path)
     store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo("owner-repo", installation_id="111")
     store.add_activity("owner-repo", "patrol", "budget:5")
 
-    resp = client.get("/api/activities")
+    with patch("catocode.api.routes.check_repo_write_access", return_value=(True, "write")):
+        resp = client.get("/api/activities")
     assert resp.status_code == 200
     activities = resp.json()
     assert len(activities) == 1
@@ -135,6 +172,7 @@ def test_api_activities(tmp_path):
 def test_api_activity_detail_includes_steps_runtime_session_and_runtime_result(tmp_path):
     client, store = _make_client(tmp_path)
     store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo("owner-repo", installation_id="111")
     session_id = store.create_runtime_session(
         repo_id="owner-repo",
         entry_kind="refresh_repo_memory_review",
@@ -182,7 +220,8 @@ def test_api_activity_detail_includes_steps_runtime_session_and_runtime_result(t
         duration_ms=1000,
     )
 
-    resp = client.get(f"/api/activities/{activity_id}")
+    with patch("catocode.api.routes.check_repo_write_access", return_value=(True, "write")):
+        resp = client.get(f"/api/activities/{activity_id}")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -198,6 +237,7 @@ def test_api_activity_detail_includes_steps_runtime_session_and_runtime_result(t
 def test_api_retry_setup_requeues_repo_and_clears_error(tmp_path):
     client, store = _make_client(tmp_path)
     store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo("owner-repo", installation_id="111")
     failed_setup_id = store.add_activity("owner-repo", "setup", "watch")
     store.update_activity(failed_setup_id, status="failed", summary="init failed")
     store.update_repo_lifecycle(
@@ -207,7 +247,8 @@ def test_api_retry_setup_requeues_repo_and_clears_error(tmp_path):
         last_setup_activity_id=failed_setup_id,
     )
 
-    resp = client.post("/api/repos/owner-repo/setup/retry")
+    with patch("catocode.api.routes.check_repo_write_access", return_value=(True, "write")):
+        resp = client.post("/api/repos/owner-repo/setup/retry")
 
     assert resp.status_code == 200
     payload = resp.json()
@@ -223,7 +264,7 @@ def test_api_retry_setup_requeues_repo_and_clears_error(tmp_path):
     assert repo["last_setup_activity_id"] == payload["activity_id"]
 
 
-def test_api_health(tmp_path):
+def test_webhook_health(tmp_path):
     client, _ = _make_client(tmp_path)
     resp = client.get("/webhook/health")
     assert resp.status_code == 200
@@ -236,3 +277,24 @@ def test_api_install_url_available_in_dashboard_mode(tmp_path):
     assert resp.status_code == 200
     data = resp.json()
     assert data["url"].startswith("https://github.com/apps/")
+
+
+def test_api_repos_hides_repo_without_installation_or_write_access(tmp_path):
+    client, store = _make_client(tmp_path)
+    store.add_repo("installed-visible", "https://github.com/owner/visible")
+    store.update_repo("installed-visible", installation_id="111")
+    store.add_repo("installed-hidden", "https://github.com/owner/hidden")
+    store.update_repo("installed-hidden", installation_id="222")
+    store.add_repo("not-installed", "https://github.com/owner/not-installed")
+
+    def _check(owner: str, repo: str, github_token: str):
+        if repo == "visible":
+            return True, "write"
+        return False, "no access"
+
+    with patch("catocode.api.routes.check_repo_write_access", side_effect=_check):
+        resp = client.get("/api/repos")
+
+    assert resp.status_code == 200
+    repos = resp.json()
+    assert [repo["id"] for repo in repos] == ["installed-visible"]

@@ -13,7 +13,6 @@ from fastapi.responses import JSONResponse
 
 from ..auth import Auth, get_auth
 from ..config import get_github_app_webhook_secret, parse_repo_url, repo_id_from_url
-from ..dashboard import make_router as make_dashboard_router
 from ..decision import decide_engagement
 from ..github.commenter import post_issue_comment
 from ..session_runtime import approval_scope_from_trigger, resolve_runtime_session_for_activity
@@ -54,9 +53,6 @@ class WebhookServer:
                 "the /webhook/app endpoint will accept unauthenticated requests. "
                 "Set this variable in production to prevent spoofed webhook events."
             )
-
-        # Dashboard API (unauthenticated)
-        self.app.include_router(make_dashboard_router(store))
 
         # Per-repo webhook (personal token mode or manual setup)
         self.app.post("/webhook/github/{repo_id}")(self._handle_webhook)

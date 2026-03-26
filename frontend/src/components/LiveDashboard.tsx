@@ -31,6 +31,7 @@ export function LiveDashboard({ initialStats, initialActivities, initialRepos }:
   }, []);
 
   useEffect(() => {
+    refresh();
     const interval = setInterval(refresh, 5000);
     return () => clearInterval(interval);
   }, [refresh]);

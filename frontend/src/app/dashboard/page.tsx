@@ -1,19 +1,12 @@
-import { getStats, getRepos, getActivities } from "@/lib/api";
 import { LiveDashboard } from "@/components/LiveDashboard";
 
-export default async function DashboardPage() {
-  const [stats, repos, activities] = await Promise.all([
-    getStats(),
-    getRepos(),
-    getActivities(),
-  ]);
-
+export default function DashboardPage() {
   return (
     <div className="space-y-6">
       <LiveDashboard
-        initialStats={stats}
-        initialActivities={stats?.recent_activities ?? activities ?? []}
-        initialRepos={repos ?? []}
+        initialStats={null}
+        initialActivities={[]}
+        initialRepos={[]}
       />
     </div>
   );
