@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import json
+import hashlib
+import hmac
 
-from catocode.webhook.verifier import verify_signature
 from catocode.webhook.parser import parse_webhook
+from catocode.webhook.verifier import verify_signature
 
 
 def test_verify_signature_valid():
@@ -13,9 +14,6 @@ def test_verify_signature_valid():
     payload = b'{"test": "data"}'
     secret = "my-secret"
 
-    # Generate expected signature
-    import hmac
-    import hashlib
     expected = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
     signature = f"sha256={expected}"
 

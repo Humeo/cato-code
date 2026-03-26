@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import catocode.auth as auth_module
 import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+import catocode.auth as auth_module
 from catocode.auth import get_auth, get_github_app_auth
 from catocode.auth.github_app import GitHubAppAuth
 from catocode.config import (
@@ -16,6 +16,7 @@ from catocode.config import (
 )
 
 # --- SaaS config getters ---
+
 
 def test_get_github_app_client_id(monkeypatch):
     monkeypatch.setenv("GITHUB_APP_CLIENT_ID", "Iv1.testclient")
@@ -28,6 +29,7 @@ def test_get_github_app_client_secret(monkeypatch):
 
 
 # --- App auth factory ---
+
 
 def test_get_github_app_auth_uses_global_app_credentials(monkeypatch):
     monkeypatch.setenv("GITHUB_APP_ID", "123456")
@@ -75,6 +77,7 @@ def test_get_github_app_auth_raises_when_missing_credentials(monkeypatch):
 
 
 # --- GitHubAppAuth token caching ---
+
 
 @pytest.mark.asyncio
 async def test_github_app_caches_token(monkeypatch):
