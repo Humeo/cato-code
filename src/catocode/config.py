@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
+from urllib.parse import urlparse
 
 
 def get_anthropic_api_key() -> str:
@@ -57,6 +58,31 @@ def get_frontend_url() -> str:
 def get_base_url() -> str:
     """Get backend base URL."""
     return os.environ.get("CATOCODE_BASE_URL", "http://localhost:8000")
+
+
+def get_shared_cookie_domain() -> str | None:
+    """Get a shared cookie domain for frontend/backend subdomains when safe."""
+
+    frontend_host = urlparse(get_frontend_url()).hostname
+    backend_host = urlparse(get_base_url()).hostname
+    if not frontend_host or not backend_host:
+        return None
+    if frontend_host == "localhost" or backend_host == "localhost":
+        return None
+    if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", frontend_host) or re.fullmatch(r"\d+\.\d+\.\d+\.\d+", backend_host):
+        return None
+
+    frontend_parts = frontend_host.split(".")
+    backend_parts = backend_host.split(".")
+    shared_suffix: list[str] = []
+    for front, back in zip(reversed(frontend_parts), reversed(backend_parts), strict=False):
+        if front != back:
+            break
+        shared_suffix.append(front)
+
+    if len(shared_suffix) < 2:
+        return None
+    return "." + ".".join(reversed(shared_suffix))
 
 
 def get_github_app_name() -> str:

@@ -17,6 +17,7 @@ from ..config import (
     get_frontend_url,
     get_github_app_client_id,
     get_github_app_client_secret,
+    get_shared_cookie_domain,
 )
 from ..store import Store
 from .crypto import decrypt_token, encrypt_token
@@ -156,6 +157,7 @@ async def github_callback(code: str, state: str, request: Request) -> RedirectRe
 
     # Set httpOnly session cookie and redirect to dashboard
     response = RedirectResponse(url=f"{frontend_url}/dashboard")
+    cookie_domain = get_shared_cookie_domain()
     response.set_cookie(
         key="session",
         value=session_token,
@@ -163,6 +165,7 @@ async def github_callback(code: str, state: str, request: Request) -> RedirectRe
         httponly=True,
         secure=os.environ.get("CATOCODE_BASE_URL", "").startswith("https"),
         samesite="lax",
+        domain=cookie_domain,
     )
     return response
 
@@ -215,5 +218,5 @@ async def logout(request: Request) -> JSONResponse:
         store.delete_session(session_cookie)
 
     response = JSONResponse({"status": "logged_out"})
-    response.delete_cookie("session")
+    response.delete_cookie("session", domain=get_shared_cookie_domain())
     return response

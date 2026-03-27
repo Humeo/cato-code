@@ -34,6 +34,75 @@ def test_github_login_uses_github_app_client_id(tmp_path, monkeypatch):
     assert "/auth/github/callback" in location
 
 
+def test_github_callback_sets_shared_cookie_domain(tmp_path, monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET_KEY", "0" * 64)
+    monkeypatch.setenv("FRONTEND_URL", "https://catocode.com")
+    monkeypatch.setenv("CATOCODE_BASE_URL", "https://api.catocode.com")
+    monkeypatch.setenv("GITHUB_APP_CLIENT_ID", "Iv1.testclient")
+    monkeypatch.setenv("GITHUB_APP_CLIENT_SECRET", "secret")
+
+    client, store = _make_client(tmp_path)
+    store.create_oauth_state("oauth-state-1")
+
+    class _Response:
+        def __init__(self, payload: dict, status_code: int = 200) -> None:
+            self._payload = payload
+            self.status_code = status_code
+
+        def json(self) -> dict:
+            return self._payload
+
+    async def _fake_post(self, url, data=None, json=None, headers=None, timeout=None):  # noqa: ANN001
+        return _Response({"access_token": "ghu_user_token"})
+
+    async def _fake_get(self, url, headers=None, timeout=None):  # noqa: ANN001
+        return _Response(
+            {
+                "id": 123,
+                "login": "octocat",
+                "email": "octocat@example.com",
+                "avatar_url": "https://avatars.example.com/octocat",
+            }
+        )
+
+    with patch("httpx.AsyncClient.post", _fake_post), patch("httpx.AsyncClient.get", _fake_get):
+        response = client.get(
+            "/auth/github/callback?code=test-code&state=oauth-state-1",
+            follow_redirects=False,
+        )
+
+    assert response.status_code in {302, 307}
+    set_cookie = response.headers["set-cookie"]
+    assert "Domain=.catocode.com" in set_cookie
+    assert "HttpOnly" in set_cookie
+
+
+def test_logout_clears_shared_cookie_domain(tmp_path, monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET_KEY", "0" * 64)
+    monkeypatch.setenv("FRONTEND_URL", "https://catocode.com")
+    monkeypatch.setenv("CATOCODE_BASE_URL", "https://api.catocode.com")
+
+    client, store = _make_client(tmp_path)
+    store.create_user(
+        user_id="user-1",
+        github_id=1,
+        github_login="octocat",
+        github_email="octocat@example.com",
+        avatar_url=None,
+        access_token=encrypt_token("ghu_user_token"),
+    )
+    store.create_session("session-token", "user-1", "2099-01-01T00:00:00+00:00")
+    client.cookies.set("session", "session-token")
+
+    response = client.post("/auth/logout")
+
+    assert response.status_code == 200
+    set_cookie = response.headers["set-cookie"]
+    assert "Domain=.catocode.com" in set_cookie
+    assert "session=\"\"" in set_cookie or "session=null" in set_cookie or "session=" in set_cookie
+    assert store.get_session("session-token") is None
+
+
 def test_install_callback_links_installation_only_when_visible_to_user(tmp_path, monkeypatch):
     monkeypatch.setenv("SESSION_SECRET_KEY", "0" * 64)
     monkeypatch.setenv("FRONTEND_URL", "http://localhost:3000")
