@@ -344,7 +344,7 @@ class ContainerManager:
             self.ensure_repo(repo_id, repo_url)
         worktree_path = session_worktree_path(repo_id, session_id)
         branch_name = session_branch_name(session_id)
-        exists = self.exec(f"test -d {worktree_path}/.git")
+        exists = self.exec(f"test -e {worktree_path}/.git")
         if exists.exit_code == 0:
             self._sync_session_runtime_files(repo_id, worktree_path)
             return worktree_path

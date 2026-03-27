@@ -194,3 +194,9 @@ def test_fix_issue_skill_uses_session_branch_and_semantic_checkpoints():
     assert "session branch" in skill.lower()
     assert "semantic checkpoint" in skill.lower()
     assert "git checkout -b repocraft/fix" not in skill
+
+
+def test_fix_issue_skill_pushes_branch_before_creating_pr():
+    skill = read_skill("fix_issue")
+    assert "git push --set-upstream origin" in skill
+    assert "--head" in skill

@@ -163,10 +163,17 @@ Add `Co-Authored-By: Claude <noreply@anthropic.com>` to the commit message.
 
 ### Step 6: Create Pull Request
 
-Build the PR description with the Evidence table:
+Before creating the PR, push the current session branch explicitly so `gh` never falls back to an interactive "where should I push?" prompt:
+
+```bash
+git push --set-upstream origin "$(git branch --show-current)"
+```
+
+Then build the PR description with the Evidence table:
 
 ```bash
 gh pr create \
+  --head "$(git branch --show-current)" \
   --title "fix: <short description> (#<issue_number>)" \
   --body "$(cat <<'EOF'
 Fixes #<issue_number>

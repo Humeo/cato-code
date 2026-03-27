@@ -40,7 +40,7 @@ def test_ensure_session_worktree_creates_branch_and_worktree(monkeypatch):
 
     def fake_exec(command: str, workdir: str = "/repos") -> ExecResult:
         commands.append((command, workdir))
-        if command.startswith("test -d "):
+        if command.startswith("test -e "):
             return ExecResult(exit_code=1, stdout="", stderr="")
         return ExecResult(exit_code=0, stdout="", stderr="")
 
@@ -57,10 +57,53 @@ def test_ensure_session_worktree_creates_branch_and_worktree(monkeypatch):
     assert worktree_path == "/repos/.worktrees/owner-repo/session-123"
     assert ensure_repo_calls == [("owner-repo", "https://github.com/owner/repo")]
     assert commands == [
-        ("test -d /repos/.worktrees/owner-repo/session-123/.git", "/repos"),
+        ("test -e /repos/.worktrees/owner-repo/session-123/.git", "/repos"),
         ("mkdir -p /repos/.worktrees/owner-repo", "/repos"),
         ("git fetch origin", "/repos/owner-repo"),
         ("git worktree add /repos/.worktrees/owner-repo/session-123 -b catocode/session/session-123", "/repos/owner-repo"),
+        (
+            "if [ -f /repos/owner-repo/CLAUDE.md ]; then cp /repos/owner-repo/CLAUDE.md /repos/.worktrees/owner-repo/session-123/CLAUDE.md; fi",
+            "/repos",
+        ),
+        (
+            "if [ -d /repos/owner-repo/.claude ]; then mkdir -p /repos/.worktrees/owner-repo/session-123/.claude && cp -R /repos/owner-repo/.claude/. /repos/.worktrees/owner-repo/session-123/.claude/; fi",
+            "/repos",
+        ),
+        (
+            "if [ -e /repos/.worktrees/owner-repo/session-123/.codebase-graph ] || [ -L /repos/.worktrees/owner-repo/session-123/.codebase-graph ]; then rm -rf /repos/.worktrees/owner-repo/session-123/.codebase-graph; fi; if [ -d /repos/owner-repo/.codebase-graph ]; then ln -s /repos/owner-repo/.codebase-graph /repos/.worktrees/owner-repo/session-123/.codebase-graph; fi",
+            "/repos",
+        ),
+    ]
+
+
+def test_ensure_session_worktree_reuses_existing_git_worktree(monkeypatch):
+    manager = object.__new__(ContainerManager)
+    commands: list[tuple[str, str]] = []
+    ensure_repo_calls: list[tuple[str, str]] = []
+
+    def fake_ensure_repo(repo_id: str, repo_url: str) -> None:
+        ensure_repo_calls.append((repo_id, repo_url))
+
+    def fake_exec(command: str, workdir: str = "/repos") -> ExecResult:
+        commands.append((command, workdir))
+        if command.startswith("test -e "):
+            return ExecResult(exit_code=0, stdout="", stderr="")
+        return ExecResult(exit_code=0, stdout="", stderr="")
+
+    manager.ensure_repo = fake_ensure_repo  # type: ignore[attr-defined]
+    manager.exec = fake_exec  # type: ignore[attr-defined]
+
+    worktree_path = ContainerManager.ensure_session_worktree(
+        manager,
+        repo_id="owner-repo",
+        repo_url="https://github.com/owner/repo",
+        session_id="session-123",
+    )
+
+    assert worktree_path == "/repos/.worktrees/owner-repo/session-123"
+    assert ensure_repo_calls == [("owner-repo", "https://github.com/owner/repo")]
+    assert commands == [
+        ("test -e /repos/.worktrees/owner-repo/session-123/.git", "/repos"),
         (
             "if [ -f /repos/owner-repo/CLAUDE.md ]; then cp /repos/owner-repo/CLAUDE.md /repos/.worktrees/owner-repo/session-123/CLAUDE.md; fi",
             "/repos",
