@@ -5,11 +5,24 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from ..config import get_github_app_name
 from ..session_runtime import approval_scope_from_trigger
 from ..store import Store
 from .parser import WebhookEvent
 
 logger = logging.getLogger(__name__)
+
+
+def _is_our_bot_login(login: str) -> bool:
+    normalized = login.strip().lower()
+    if not normalized:
+        return False
+    configured_name = get_github_app_name().strip().lower()
+    candidates = {"catocode", "catocode[bot]"}
+    if configured_name:
+        candidates.add(configured_name)
+        candidates.add(f"{configured_name}[bot]")
+    return normalized in candidates
 
 
 @dataclass
@@ -53,7 +66,7 @@ async def decide_engagement(
     elif event_type == "pr_opened":
         # Check if this is CatoCode's own PR (don't review own work)
         pr_author = event.payload.get("pull_request", {}).get("user", {}).get("login", "")
-        if pr_author.lower() in ("catocode", "catocode[bot]"):
+        if _is_our_bot_login(pr_author):
             return EngagementDecision(
                 should_engage=False,
                 activity_kind=None,
@@ -162,7 +175,7 @@ async def decide_engagement(
         pr_number = event.trigger.split(":")[1]
         pr_author = event.payload.get("pull_request", {}).get("user", {}).get("login", "")
 
-        if pr_author.lower() in ("catocode", "catocode[bot]"):
+        if _is_our_bot_login(pr_author):
             return EngagementDecision(
                 should_engage=True,
                 activity_kind="respond_review",
