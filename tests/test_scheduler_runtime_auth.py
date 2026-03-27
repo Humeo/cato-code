@@ -6,6 +6,7 @@ import pytest
 
 from catocode.auth.base import Auth, GitHubAppTokenProvider
 from catocode.scheduler import Scheduler
+from catocode.session_runtime import finalize_runtime_session
 from catocode.store import Store
 
 
@@ -92,3 +93,39 @@ async def test_scheduler_approval_check_uses_repo_installation_token(monkeypatch
     assert auth.get_token_calls == 0
     assert updated["requires_approval"] == 0
     assert updated["approved_by"] == "octocat"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_cleans_up_expired_runtime_sessions(monkeypatch, tmp_path):
+    store = Store(db_path=tmp_path / "test.db")
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    session_id = store.create_runtime_session(
+        repo_id="owner-repo",
+        entry_kind="refresh_repo_memory_review",
+        status="active",
+        worktree_path="/repos/.worktrees/owner-repo/session-gc-5",
+        branch_name="catocode/session/session-gc-5",
+    )
+    finalize_runtime_session(
+        store,
+        session_id,
+        status="done",
+        terminal_at="2026-03-25T12:00:00+00:00",
+    )
+
+    class FakeContainerManager:
+        def __init__(self) -> None:
+            self.cleaned: list[tuple[str, str]] = []
+
+        def remove_session_worktree(self, repo_id: str, session_id: str) -> None:
+            self.cleaned.append((repo_id, session_id))
+
+    container_mgr = FakeContainerManager()
+    scheduler = Scheduler(store=store, container_mgr=container_mgr, auth=FakeGitHubAppAuth())
+
+    await scheduler._cleanup_expired_runtime_sessions(as_of="2026-04-01T12:00:00+00:00")
+
+    assert container_mgr.cleaned == [("owner-repo", session_id)]
+    session = store.get_runtime_session(session_id)
+    assert session is not None
+    assert session["gc_status"] == "done"

@@ -24,12 +24,14 @@ from .container.manager import ContainerManager
 from .container.registry import ContainerRegistry
 from .decision import check_user_is_admin
 from .dispatcher import dispatch
+from .session_runtime import collect_runtime_sessions_for_gc
 from .store import Store
 
 logger = logging.getLogger(__name__)
 
 APPROVAL_CHECK_INTERVAL_SECS = 30
 DISPATCH_CHECK_INTERVAL_SECS = 5
+GC_CHECK_INTERVAL_SECS = 3600
 MAX_CONCURRENT = 3  # Global max concurrent activities
 
 
@@ -66,6 +68,16 @@ class Scheduler:
             self._repo_locks[repo_id] = asyncio.Lock()
         return self._repo_locks[repo_id]
 
+    def _resolve_container_manager_for_repo(self, repo: dict | None) -> ContainerManager:
+        if self._registry is not None:
+            user_id = repo.get("user_id") if repo else None
+            if user_id:
+                return self._registry.get(user_id)
+            return ContainerManager()
+        if self._container_mgr is None:
+            raise RuntimeError("Scheduler has no container manager configured")
+        return self._container_mgr
+
     async def _resolve_repo_github_token(self, repo: dict | None) -> str:
         installation_id = repo.get("installation_id") if repo else None
         if installation_id and isinstance(self._auth, GitHubAppTokenProvider):
@@ -91,6 +103,7 @@ class Scheduler:
                 self._approval_loop(),
                 self._patrol_loop(),
                 self._dispatch_loop(),
+                self._gc_loop(),
             )
         except asyncio.CancelledError:
             pass
@@ -371,6 +384,39 @@ class Scheduler:
             except asyncio.TimeoutError:
                 pass
 
+    async def _gc_loop(self) -> None:
+        """Periodically remove expired session worktrees."""
+        while not self._stop_event.is_set():
+            try:
+                cleaned = await self._cleanup_expired_runtime_sessions()
+                if cleaned:
+                    logger.info("Cleaned %d expired runtime sessions", len(cleaned))
+            except Exception as e:
+                logger.error("GC loop error: %s", e)
+
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(),
+                    timeout=GC_CHECK_INTERVAL_SECS,
+                )
+                break
+            except asyncio.TimeoutError:
+                pass
+
+    async def _cleanup_expired_runtime_sessions(self, *, as_of: str | None = None) -> list[str]:
+        cleaned: list[str] = []
+        for session in collect_runtime_sessions_for_gc(self._store, as_of=as_of):
+            repo = self._store.get_repo(session["repo_id"])
+            container_mgr = self._resolve_container_manager_for_repo(repo)
+            try:
+                container_mgr.remove_session_worktree(session["repo_id"], session["id"])
+            except Exception as exc:
+                self._store.update_runtime_session(session["id"], gc_status="failed", gc_error=str(exc))
+                continue
+            self._store.update_runtime_session(session["id"], gc_status="done", gc_error=None)
+            cleaned.append(session["id"])
+        return cleaned
+
     async def _dispatch_one(self, activity_id: str, repo_id: str) -> None:
         """Dispatch one activity with per-repo serial lock and global semaphore."""
         async with self._semaphore:
@@ -382,15 +428,7 @@ class Scheduler:
 
                 # Resolve container manager: per-user registry or legacy single manager
                 repo = self._store.get_repo(repo_id)
-                if self._registry is not None:
-                    user_id = repo.get("user_id") if repo else None
-                    if user_id:
-                        container_mgr = self._registry.get(user_id)
-                    else:
-                        # Fallback: legacy container for CLI-mode repos without user_id
-                        container_mgr = ContainerManager()
-                else:
-                    container_mgr = self._container_mgr
+                container_mgr = self._resolve_container_manager_for_repo(repo)
 
                 try:
                     await dispatch(
