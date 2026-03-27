@@ -209,16 +209,20 @@ async def _ensure_visible_repo_cache(
     return await _sync_visible_repos_for_installation(store, current_user, installation_id, github_token)
 
 
-async def _can_manage_repo_live(repo: dict, github_token: str) -> bool:
+async def _get_live_repo_permission(repo: dict, github_token: str) -> str | None:
     if not repo.get("installation_id"):
-        return False
+        return None
     try:
         owner, repo_name = parse_repo_url(repo["repo_url"])
     except Exception:
         logger.warning("Skipping repo with invalid URL in dashboard: %s", repo.get("id"))
-        return False
-    has_access, _reason = await check_repo_write_access(owner, repo_name, github_token)
-    return has_access
+        return None
+    has_access, reason = await check_repo_write_access(owner, repo_name, github_token)
+    if has_access:
+        return "write"
+    if "invalid" in reason.lower() or "could not check" in reason.lower() or "failed" in reason.lower():
+        return None
+    return "none"
 
 
 async def _list_visible_repos(store: Store, current_user: dict) -> list[dict]:
@@ -246,14 +250,30 @@ async def _list_visible_repos(store: Store, current_user: dict) -> list[dict]:
     }
 
     visible: list[dict] = []
+    fallback_repos_by_installation: dict[str, list[dict]] = {}
     for repo in repos:
         installation_id = repo.get("installation_id")
         if installation_id in authoritative_installations:
             if visible_permissions.get(repo["id"]) in WRITE_PERMISSIONS:
                 visible.append(repo)
             continue
-        if await _can_manage_repo_live(repo, github_token):
-            visible.append(repo)
+        if installation_id:
+            fallback_repos_by_installation.setdefault(installation_id, []).append(repo)
+
+    for installation_id, installation_repos in fallback_repos_by_installation.items():
+        permissions = await asyncio.gather(
+            *[_get_live_repo_permission(repo, github_token) for repo in installation_repos]
+        )
+        if all(permission is not None for permission in permissions):
+            cached_rows = [
+                {"repo_id": repo["id"], "permission": permission}
+                for repo, permission in zip(installation_repos, permissions, strict=True)
+                if permission in WRITE_PERMISSIONS
+            ]
+            store.replace_user_visible_repos(current_user["id"], installation_id, cached_rows)
+        for repo, permission in zip(installation_repos, permissions, strict=True):
+            if permission in WRITE_PERMISSIONS:
+                visible.append(repo)
     _log_slow_api(
         "_list_visible_repos",
         started_at,
@@ -282,7 +302,8 @@ async def _require_visible_repo(store: Store, repo_id: str, current_user: dict) 
         if cached and cached.get("permission") in WRITE_PERMISSIONS:
             return repo
         raise HTTPException(status_code=403, detail="Access denied")
-    if not await _can_manage_repo_live(repo, github_token):
+    permission = await _get_live_repo_permission(repo, github_token)
+    if permission not in WRITE_PERMISSIONS:
         raise HTTPException(status_code=403, detail="Access denied")
     return repo
 

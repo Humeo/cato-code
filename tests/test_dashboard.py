@@ -115,6 +115,31 @@ def test_api_dashboard_payload_excludes_retired_patrol_activities(tmp_path):
     assert [activity["kind"] for activity in data["activities"]] == ["analyze_issue"]
 
 
+def test_api_dashboard_caches_live_visibility_after_installation_sync_failure(tmp_path):
+    client, store = _make_client(tmp_path)
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo("owner-repo", watch=1, installation_id="111")
+
+    failing_sync = AsyncMock(side_effect=RuntimeError("403 Forbidden"))
+    live_check = AsyncMock(return_value=(True, "write"))
+
+    with (
+        patch("catocode.api.routes.list_user_installation_repositories", failing_sync),
+        patch("catocode.api.routes.check_repo_write_access", live_check),
+    ):
+        first = client.get("/api/dashboard")
+        second = client.get("/api/dashboard")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert live_check.await_count == 1
+    sync_row = store.get_user_installation_repo_sync("user-1", "111")
+    assert sync_row is not None
+    assert sync_row["last_error"] is None
+    visible_rows = store.list_user_visible_repos("user-1")
+    assert [row["repo_id"] for row in visible_rows] == ["owner-repo"]
+
+
 def test_api_repos(tmp_path):
     client, store = _make_client(tmp_path)
     store.add_repo("owner-repo", "https://github.com/owner/repo")
@@ -459,4 +484,7 @@ def test_api_repos_falls_back_to_live_check_when_installation_sync_fails(tmp_pat
     assert [repo["id"] for repo in first.json()] == ["owner-alpha"]
     assert [repo["id"] for repo in second.json()] == ["owner-alpha"]
     assert sync_mock.await_count == 1
-    assert live_check_mock.await_count == 2
+    assert live_check_mock.await_count == 1
+    sync_row = store.get_user_installation_repo_sync("user-1", "111")
+    assert sync_row is not None
+    assert sync_row["last_error"] is None
