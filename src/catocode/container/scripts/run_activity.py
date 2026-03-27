@@ -87,13 +87,15 @@ async def run(prompt: str, max_turns: int, cwd: str, session_id: str | None = No
     if session_id:
         options.resume = session_id
 
+    exit_code = 0
+
     try:
         async for msg in query(prompt=prompt, options=options):
             if isinstance(msg, AssistantMessage):
                 _process_assistant_message(msg)
             elif isinstance(msg, ResultMessage):
                 _process_result_message(msg)
-                return 1 if msg.is_error else 0
+                exit_code = 1 if msg.is_error else 0
             elif isinstance(msg, SystemMessage):
                 _emit({"type": "system", "subtype": msg.subtype})
     except Exception as e:
@@ -108,7 +110,7 @@ async def run(prompt: str, max_turns: int, cwd: str, session_id: str | None = No
         })
         return 1
 
-    return 0
+    return exit_code
 
 
 def main() -> None:

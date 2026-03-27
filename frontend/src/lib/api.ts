@@ -14,8 +14,8 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T | null> 
   try {
     const res = await fetch(`${getBaseUrl()}${path}`, {
       cache: "no-store",
-      credentials: "include",
       ...init,
+      credentials: "include",
     });
     if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
     return res.json() as Promise<T>;
@@ -24,8 +24,8 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T | null> 
   }
 }
 
-export async function getStats(): Promise<Stats | null> {
-  return apiFetch<Stats>("/api/stats");
+export async function getStats(init?: RequestInit): Promise<Stats | null> {
+  return apiFetch<Stats>("/api/stats", init);
 }
 
 export async function getInstallUrl(): Promise<string | null> {
@@ -33,12 +33,12 @@ export async function getInstallUrl(): Promise<string | null> {
   return data?.url ?? null;
 }
 
-export async function getRepos(): Promise<Repo[] | null> {
-  return apiFetch<Repo[]>("/api/repos");
+export async function getRepos(init?: RequestInit): Promise<Repo[] | null> {
+  return apiFetch<Repo[]>("/api/repos", init);
 }
 
-export async function getActivities(): Promise<Activity[] | null> {
-  return apiFetch<Activity[]>("/api/activities");
+export async function getActivities(init?: RequestInit): Promise<Activity[] | null> {
+  return apiFetch<Activity[]>("/api/activities", init);
 }
 
 export async function watchRepo(
