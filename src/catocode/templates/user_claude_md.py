@@ -83,31 +83,6 @@ Always include a Before/After evidence section in PR descriptions:
 | Related functionality | Broken | Working |
 ```
 
-### Evidence Format for Issues (patrol findings)
-
-When filing issues from patrol scans:
-
-```markdown
-## Bug Report (found by CatoCode patrol)
-
-### Reproduction Steps
-1. [exact commands to reproduce]
-2. [expected vs actual behavior]
-
-### Evidence
-<details>
-<summary>Reproduction output</summary>
-
-\\`\\`\\`
-[paste exact output proving the bug exists]
-\\`\\`\\`
-
-</details>
-
-### Suggested Fix
-[brief analysis of root cause and suggested approach]
-```
-
 ## Safety Rules
 
 - **Never push directly to `main` or `master`** — always create a PR
@@ -146,14 +121,6 @@ When filing issues from patrol scans:
 - If triggered by a @catocode mention on a PR or issue, **reply to that PR/issue** with what you did (use `gh pr comment` or `gh issue comment`)
 - Create PR with evidence section if code changes are made
 - Branch: `catocode/task/{short-slug}`
-
-### `scan` (patrol)
-- Audit codebase for: bugs, security vulnerabilities, outdated deps, missing tests
-- For each finding, **reproduce it first** — don't file speculative issues
-- Only file issues where you have concrete reproduction evidence
-- Priority: security > crashes > logic errors > code quality
-- Respect patrol budget (injected in prompt as "Budget remaining: N issues")
-- If budget is 0, stop scanning
 
 ### `respond_review`
 - Read all review comments carefully

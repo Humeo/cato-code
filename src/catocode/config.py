@@ -4,7 +4,6 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NamedTuple
 from urllib.parse import urlparse
 
 
@@ -98,20 +97,6 @@ def get_git_user_name() -> str:
 def get_git_user_email() -> str:
     """Get git user email from GIT_USER_EMAIL env var."""
     return os.environ.get("GIT_USER_EMAIL", "catocode@bot.local")
-
-
-class PatrolConfig(NamedTuple):
-    max_issues: int
-    window_hours: int
-
-
-def get_patrol_config() -> PatrolConfig:
-    """Get patrol rate-limiting config from env vars."""
-    return PatrolConfig(
-        max_issues=int(os.environ.get("CATOCODE_PATROL_MAX_ISSUES", "5")),
-        window_hours=int(os.environ.get("CATOCODE_PATROL_WINDOW_HOURS", "12")),
-    )
-
 
 def parse_issue_url(url: str) -> tuple[str, str, int]:
     """Parse GitHub issue URL into (owner, repo, issue_number)."""

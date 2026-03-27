@@ -128,8 +128,8 @@ You review a PR with full evidence attached. 30 seconds to verify — no local t
 │                                                                  │
 │  ┌─ Scheduler ─────────────────────────────────────────────┐    │
 │  │  Approval Loop (30s)  — poll issue comments for /approve │    │
-│  │  Patrol Loop (3600s)  — scan repos for new vulnerabilities│   │
 │  │  Dispatch Loop (5s)   — pick pending → execute in container│  │
+│  │  GC Loop (3600s)      — clean expired session worktrees   │    │
 │  │                                                          │    │
 │  │  Concurrency: per-repo asyncio.Lock + global Semaphore   │    │
 │  └──────────────────────────────────────────────────────────┘    │
@@ -150,9 +150,9 @@ You review a PR with full evidence attached. 30 seconds to verify — no local t
 │                                                                  │
 │  ┌─ API (SaaS mode) ──────┐  ┌─ Store ─────────────────────┐   │
 │  │  OAuth 2.0 + Sessions   │  │  SQLite / PostgreSQL        │   │
-│  │  20+ REST endpoints     │  │  12 tables, 15 migrations   │   │
+│  │  20+ REST endpoints     │  │  Runtime sessions + steps   │   │
 │  │  SSE log streaming      │  │  Ownership-scoped queries   │   │
-│  │  Patrol management      │  │  Rolling-window budgets     │   │
+│  │  Watch/setup controls   │  │  Cost + result persistence  │   │
 │  └─────────────────────────┘  └─────────────────────────────┘   │
 │                                                                  │
 └──────────────────────────┬──────────────────────────────────────┘
@@ -177,7 +177,6 @@ Skills are Markdown prompt templates in `src/catocode/container/skills/`. Edit t
 | `review_pr`      | PR opened         | Review code quality, security, test coverage, post structured review                                       |
 | `respond_review` | PR review comment | Resume session, address feedback, push new commits (never force-push)                                      |
 | `triage`         | Issue opened      | Classify (bug/feature/question/duplicate), attempt quick reproduction, apply labels                        |
-| `patrol`         | Scheduled         | Proactively scan changed files for security/bugs, file issues with evidence, respect rolling-window budget |
 
 ### Proof of Work Protocol
 
@@ -222,7 +221,7 @@ Issue opened → analyze_issue (autonomous)
 
 ### Issue Deduplication (RAG Pipeline)
 
-Before filing a new issue (patrol) or analyzing one (analyze_issue), CatoCode checks for duplicates:
+Before analyzing a new issue, CatoCode checks for duplicates:
 
 1. **Stage 1 — Vector recall**: Generate embedding for the new issue, cosine-similarity search against indexed open issues (top-5 candidates)
 2. **Stage 2 — LLM judgment**: Claude Haiku classifies each candidate as `duplicate`, `related`, or `unrelated`
@@ -291,13 +290,13 @@ Multiple repos are supported. Installation only makes them visible; `Watch` is t
 
 The dashboard starts automatically with `docker compose up -d`. Open [http://localhost:3000](http://localhost:3000).
 
-Features: real-time activity feed (5s polling), live log streaming (SSE), watch/setup lifecycle, patrol configuration, cost tracking.
+Features: real-time activity feed (5s polling), live log streaming (SSE), watch/setup lifecycle, retry setup, cost tracking.
 
 > To point at a remote backend, set `NEXT_PUBLIC_API_URL=http://your-server:8000` in `.env`, then run `docker compose up -d --build frontend`.
 
 ### 5. Webhooks (recommended)
 
-Without webhooks, CatoCode uses scheduled patrol scans. Webhooks cut response latency from minutes to seconds.
+Webhooks are the primary trigger path. They cut response latency from minutes to seconds and keep the bot aligned with real repository activity.
 
 ```bash
 # Create a public tunnel (macOS)
@@ -374,7 +373,7 @@ src/catocode/
 
 frontend/                  # Next.js 15 dashboard
 ├── src/app/               # Pages (landing, dashboard, activity detail)
-├── src/components/        # UI (live dashboard, log viewer, patrol panel)
+├── src/components/        # UI (live dashboard, log viewer, repo controls)
 └── src/lib/               # API client, TypeScript types
 ```
 

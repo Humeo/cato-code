@@ -8,7 +8,7 @@ Explore this repository thoroughly and understand its structure, architecture, t
 build process, code conventions, and — critically — how to reproduce bugs and take screenshots.
 
 Your task is to create a `CLAUDE.md` file in the project root directory. This file will be used
-by all future activities (fix_issue, patrol, review, etc.) to work effectively with this codebase.
+by all future activities (fix_issue, review, respond_review, etc.) to work effectively with this codebase.
 
 ## Required Sections
 

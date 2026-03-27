@@ -4,21 +4,18 @@ No Docker, no network, no API key required.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
-# --- Config ---
-
 from catocode.config import (
-    PatrolConfig,
     get_git_user_email,
     get_git_user_name,
-    get_patrol_config,
     parse_issue_url,
     repo_id_from_url,
 )
+
+# --- Config ---
 
 
 def test_parse_issue_url():
@@ -54,21 +51,6 @@ def test_get_git_user_name_default(monkeypatch: pytest.MonkeyPatch):
 def test_get_git_user_email_from_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("GIT_USER_EMAIL", "alice@example.com")
     assert get_git_user_email() == "alice@example.com"
-
-
-def test_get_patrol_config_defaults(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("CATOCODE_PATROL_MAX_ISSUES", raising=False)
-    monkeypatch.delenv("CATOCODE_PATROL_WINDOW_HOURS", raising=False)
-    cfg = get_patrol_config()
-    assert cfg == PatrolConfig(max_issues=5, window_hours=12)
-
-
-def test_get_patrol_config_from_env(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("CATOCODE_PATROL_MAX_ISSUES", "10")
-    monkeypatch.setenv("CATOCODE_PATROL_WINDOW_HOURS", "24")
-    cfg = get_patrol_config()
-    assert cfg.max_issues == 10
-    assert cfg.window_hours == 24
 
 
 # --- Store ---
@@ -155,41 +137,6 @@ def test_store_add_logs_batch(tmp_path: Path):
     store.add_logs_batch(aid, lines)
     logs = store.get_logs(aid)
     assert len(logs) == 10
-
-
-def test_store_patrol_budget_fresh(tmp_path: Path):
-    store = Store(tmp_path / "test.db")
-    store.add_repo("r", "https://github.com/a/b")
-    # Default budget for new repo
-    budget = store.get_patrol_budget("r")
-    assert budget == 5
-
-
-def test_store_patrol_budget_decrement(tmp_path: Path):
-    store = Store(tmp_path / "test.db")
-    store.add_repo("r", "https://github.com/a/b")
-    store.init_patrol_budget("r", max_issues=5, window_hours=12)
-    store.decrement_patrol_budget("r")
-    store.decrement_patrol_budget("r")
-    assert store.get_patrol_budget("r") == 3
-
-
-def test_store_patrol_budget_window_reset(tmp_path: Path):
-    from datetime import datetime, timezone, timedelta
-    store = Store(tmp_path / "test.db")
-    store.add_repo("r", "https://github.com/a/b")
-    store.init_patrol_budget("r", max_issues=5, window_hours=1)
-    store.decrement_patrol_budget("r")
-    store.decrement_patrol_budget("r")
-    # Manually set window_start to 2 hours ago via public db interface
-    old_start = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
-    store._db.execute(
-        "UPDATE patrol_budget SET window_start = ? WHERE repo_id = ?",
-        (old_start, "r"),
-    )
-    store._db.commit()
-    # Budget should reset to max
-    assert store.get_patrol_budget("r") == 5
 
 
 def test_store_processed_event_dedup(tmp_path: Path):
@@ -397,20 +344,8 @@ def test_user_claude_md_task_has_reply_rule():
 
 from catocode.templates.prompts import (
     fix_issue_prompt,
-    patrol_prompt,
     triage_prompt,
 )
-
-
-def test_patrol_prompt_includes_budget():
-    prompt = patrol_prompt("owner-repo", budget_remaining=3)
-    assert "3" in prompt
-    assert "budget" in prompt.lower()
-
-
-def test_patrol_prompt_zero_budget():
-    prompt = patrol_prompt("owner-repo", budget_remaining=0)
-    assert "0" in prompt
 
 
 def test_fix_issue_prompt_includes_evidence_template():

@@ -1,4 +1,4 @@
-"""Issue indexer: batch/incremental embedding of GitHub issues for patrol deduplication."""
+"""Issue indexer for duplicate detection across repository issues."""
 
 from __future__ import annotations
 
@@ -113,8 +113,8 @@ async def _index_issue(
 
     file_paths_str = ",".join(file_paths_list) if file_paths_list else None
 
-    # Determine source: CatoCode patrol issues have a specific body pattern
-    source = "catocode" if "found by" in body.lower() and "patrol" in body.lower() else "human"
+    # Determine source: issues authored by CatoCode use a recognizable report header.
+    source = "catocode" if "found by catocode" in body.lower() else "human"
 
     store.upsert_issue_embedding(
         repo_id=repo_id,

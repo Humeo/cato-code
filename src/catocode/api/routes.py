@@ -9,10 +9,9 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from ..config import get_github_app_name, get_patrol_config, parse_repo_url
+from ..config import get_github_app_name, parse_repo_url
 from ..github.permissions import check_repo_write_access, list_user_installation_repositories
 from ..store import Store
 from .crypto import decrypt_token
@@ -23,13 +22,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["api"])
 VISIBLE_REPO_CACHE_TTL = timedelta(minutes=5)
 WRITE_PERMISSIONS = {"write", "admin"}
-
-
-class PatrolSettings(BaseModel):
-    patrol_enabled: bool
-    patrol_interval_hours: int = Field(default=12, gt=0, le=168)
-    patrol_max_issues: int = Field(default=5, gt=0, le=50)
-    patrol_window_hours: int = Field(default=12, gt=0, le=168)
 
 
 def _enrich_activity(activity: dict) -> dict:
@@ -93,8 +85,6 @@ def _queue_repo_setup(store: Store, repo_id: str, trigger: str) -> tuple[str | N
         raise HTTPException(status_code=404, detail="Repo not found")
 
     store.update_repo(repo_id, watch=1)
-    patrol_cfg = get_patrol_config()
-    store.init_patrol_budget(repo_id, patrol_cfg.max_issues, patrol_cfg.window_hours)
 
     if repo.get("lifecycle_status") == "ready":
         return None, "ready"
@@ -446,80 +436,5 @@ def make_router(store: Store) -> APIRouter:
         store.create_install_state(state, current_user["id"])
         url = f"https://github.com/apps/{app_name}/installations/new?state={state}"
         return {"url": url}
-
-    # --- Patrol endpoints ---
-
-    @r.patch("/repos/{repo_id}/patrol")
-    async def update_patrol_settings(
-        repo_id: str, settings: PatrolSettings, current_user: CurrentUser
-    ) -> dict:
-        await _require_visible_repo(store, repo_id, current_user)
-        store.update_patrol_settings(
-            repo_id=repo_id,
-            enabled=settings.patrol_enabled,
-            interval_hours=settings.patrol_interval_hours,
-            max_issues=settings.patrol_max_issues,
-            window_hours=settings.patrol_window_hours,
-        )
-        logger.info(
-            "User %s updated patrol settings for %s: enabled=%s",
-            current_user["id"][:8],
-            repo_id,
-            settings.patrol_enabled,
-        )
-        return {"status": "updated"}
-
-    @r.post("/repos/{repo_id}/patrol/trigger")
-    async def trigger_patrol(repo_id: str, current_user: CurrentUser) -> dict:
-        repo = await _require_visible_repo(store, repo_id, current_user)
-
-        # Ensure budget row exists for this repo
-        max_issues = repo.get("patrol_max_issues") or 5
-        window_hours = repo.get("patrol_window_hours") or 12
-        store.init_patrol_budget(repo_id, max_issues=max_issues, window_hours=window_hours)
-
-        budget = store.get_patrol_budget(repo_id)
-        if budget <= 0:
-            raise HTTPException(
-                status_code=429,
-                detail=f"Patrol budget exhausted ({max_issues} issues/{window_hours}h window). Wait for the window to reset.",
-            )
-
-        activity_id = store.add_activity(repo_id, "patrol", f"budget:{budget}")
-        logger.info("Manual patrol trigger by %s for %s (budget=%d)", current_user["id"][:8], repo_id, budget)
-        return {"status": "triggered", "activity_id": activity_id}
-
-    @r.get("/repos/{repo_id}/patrol/status")
-    async def get_patrol_status(repo_id: str, current_user: CurrentUser) -> dict:
-        repo = await _require_visible_repo(store, repo_id, current_user)
-
-        budget = store.get_patrol_budget(repo_id)
-
-        # Find last patrol activity
-        activities = store.list_activities(repo_id=repo_id)
-        last_patrol_at: str | None = None
-        for a in reversed(list(activities)):
-            if a["kind"] == "patrol" and a["status"] in ("done", "failed"):
-                last_patrol_at = a["updated_at"]
-                break
-
-        # Check embedding service
-        from ..embeddings import check_embedding_service, is_embedding_service_configured
-        if is_embedding_service_configured():
-            emb_ok, emb_err = await check_embedding_service()
-            embedding_status = "ok" if emb_ok else f"error: {emb_err}"
-        else:
-            embedding_status = "not_configured"
-
-        return {
-            "enabled": bool(repo.get("patrol_enabled")),
-            "patrol_interval_hours": repo.get("patrol_interval_hours", 12),
-            "patrol_max_issues": repo.get("patrol_max_issues", 5),
-            "patrol_window_hours": repo.get("patrol_window_hours", 12),
-            "budget_remaining": budget,
-            "last_patrol_at": last_patrol_at,
-            "last_patrol_sha": repo.get("last_patrol_sha"),
-            "embedding_service_status": embedding_status,
-        }
 
     return r

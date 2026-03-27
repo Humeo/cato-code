@@ -1,4 +1,4 @@
-"""Embedding service for CatoCode patrol deduplication.
+"""Embedding service for CatoCode issue deduplication.
 
 Uses OpenAI-compatible client pointing to yunwu.ai for:
 - text-embedding-3-large embeddings (dimension: 3072)

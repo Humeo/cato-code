@@ -5,7 +5,6 @@ import pytest
 from catocode.skill_renderer import (
     build_analyze_issue_prompt,
     build_fix_issue_prompt,
-    build_patrol_prompt,
     build_respond_review_prompt,
     build_triage_prompt,
     read_skill,
@@ -84,37 +83,6 @@ def test_build_fix_issue_prompt():
     assert "session branch" in prompt.lower()
     assert "checkpoint" in prompt.lower()
     assert "repocraft/fix" not in prompt
-
-
-def test_build_patrol_prompt():
-    """Test that build_patrol_prompt generates a complete prompt."""
-    prompt = build_patrol_prompt(
-        repo_id="owner-repo",
-        budget_remaining=5,
-        last_areas=["auth", "database"],
-    )
-
-    # Should contain the skill content
-    assert "Proactive Codebase Patrol" in prompt or "patrol" in prompt.lower()
-
-    # Should contain the current task section
-    assert "## Current Task" in prompt
-    assert "repository owner-repo" in prompt
-    assert "5 issue(s) remaining" in prompt
-    assert "auth" in prompt
-    assert "database" in prompt
-
-
-def test_build_patrol_prompt_no_last_areas():
-    """Test patrol prompt without last_areas."""
-    prompt = build_patrol_prompt(
-        repo_id="owner-repo",
-        budget_remaining=3,
-        last_areas=None,
-    )
-
-    assert "## Current Task" in prompt
-    assert "3 issue(s) remaining" in prompt
 
 
 def test_build_triage_prompt():

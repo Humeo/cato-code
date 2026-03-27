@@ -1262,48 +1262,6 @@ class Store:
         )
         self._db.commit()
 
-    # --- patrol budget ---
-
-    def get_patrol_budget(self, repo_id: str) -> int:
-        """Return remaining issues budget for this patrol window. Resets when window expires."""
-        row = self._db.execute_one(
-            "SELECT * FROM patrol_budget WHERE repo_id = ?", (repo_id,)
-        )
-        if row is None:
-            return 5  # Default budget for new repos
-
-        window_start = datetime.fromisoformat(row["window_start"])
-        window_hours = row["window_hours"]
-        elapsed_hours = (datetime.now(timezone.utc) - window_start).total_seconds() / 3600
-
-        if elapsed_hours >= window_hours:
-            self._db.execute(
-                "UPDATE patrol_budget SET window_start = ?, issues_filed = 0 WHERE repo_id = ?",
-                (_now(), repo_id),
-            )
-            self._db.commit()
-            return row["max_issues"]
-
-        return max(0, row["max_issues"] - row["issues_filed"])
-
-    def init_patrol_budget(self, repo_id: str, max_issues: int = 5, window_hours: int = 12) -> None:
-        """Initialize patrol budget for a repo (idempotent)."""
-        self._db.execute(
-            """INSERT OR IGNORE INTO patrol_budget
-               (repo_id, window_start, issues_filed, max_issues, window_hours)
-               VALUES (?, ?, 0, ?, ?)""",
-            (repo_id, _now(), max_issues, window_hours),
-        )
-        self._db.commit()
-
-    def decrement_patrol_budget(self, repo_id: str) -> None:
-        """Record that one issue was filed in the current patrol window."""
-        self._db.execute(
-            "UPDATE patrol_budget SET issues_filed = issues_filed + 1 WHERE repo_id = ?",
-            (repo_id,),
-        )
-        self._db.commit()
-
     # --- approval workflow ---
 
     def get_pending_approval_activities(self) -> list[dict]:
@@ -1565,7 +1523,7 @@ class Store:
         self._db.commit()
         return row["user_id"]
 
-    # --- patrol reviewed files ---
+    # --- reviewed files ---
 
     def upsert_reviewed_file(
         self, repo_id: str, file_path: str, commit_sha: str, review_source: str
@@ -1702,41 +1660,6 @@ class Store:
                 if fp:
                     result.add(fp)
         return result
-
-    # --- patrol settings ---
-
-    def update_patrol_settings(
-        self,
-        repo_id: str,
-        enabled: bool,
-        interval_hours: int,
-        max_issues: int,
-        window_hours: int,
-    ) -> None:
-        """Update patrol configuration for a repo."""
-        self._db.execute(
-            "UPDATE repos SET patrol_enabled = ?, patrol_interval_hours = ?, "
-            "patrol_max_issues = ?, patrol_window_hours = ? WHERE id = ?",
-            (1 if enabled else 0, interval_hours, max_issues, window_hours, repo_id),
-        )
-        self._db.commit()
-        # Also update patrol_budget table
-        self._db.execute(
-            """INSERT INTO patrol_budget (repo_id, window_start, issues_filed, max_issues, window_hours)
-               VALUES (?, ?, 0, ?, ?)
-               ON CONFLICT(repo_id) DO UPDATE SET
-                 max_issues = excluded.max_issues,
-                 window_hours = excluded.window_hours""",
-            (repo_id, _now(), max_issues, window_hours),
-        )
-        self._db.commit()
-
-    def update_last_patrol_sha(self, repo_id: str, sha: str) -> None:
-        """Record the HEAD SHA of the last patrol run."""
-        self._db.execute(
-            "UPDATE repos SET last_patrol_sha = ? WHERE id = ?", (sha, repo_id)
-        )
-        self._db.commit()
 
     # --- code definitions ---
 

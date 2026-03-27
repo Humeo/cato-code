@@ -167,14 +167,14 @@ def test_api_activities(tmp_path):
     client, store = _make_client(tmp_path)
     store.add_repo("owner-repo", "https://github.com/owner/repo")
     store.update_repo("owner-repo", installation_id="111")
-    store.add_activity("owner-repo", "patrol", "budget:5")
+    store.add_activity("owner-repo", "triage", "issue:5")
 
     with patch("catocode.api.routes.check_repo_write_access", return_value=(True, "write")):
         resp = client.get("/api/activities")
     assert resp.status_code == 200
     activities = resp.json()
     assert len(activities) == 1
-    assert activities[0]["kind"] == "patrol"
+    assert activities[0]["kind"] == "triage"
 
 
 def test_api_activity_detail_includes_steps_runtime_session_and_runtime_result(tmp_path):

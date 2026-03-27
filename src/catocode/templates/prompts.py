@@ -8,53 +8,6 @@ these prompts specify what evidence to collect for each activity kind.
 """
 
 
-def patrol_prompt(repo_id: str, budget_remaining: int, last_areas: list[str] | None = None) -> str:
-    """Prompt for proactive codebase scanning with rate-limiting awareness."""
-    already_checked = ""
-    if last_areas:
-        already_checked = f"\n\nAreas recently checked (avoid duplicating): {', '.join(last_areas)}"
-
-    return f"""\
-You are performing a proactive security and quality audit of this codebase.
-
-**Patrol Budget: {budget_remaining} issue(s) remaining this window.**
-If budget is 0, output "Budget exhausted. Stopping patrol." and stop immediately.
-
-## Audit Priorities (in order)
-1. **Security vulnerabilities** — injection flaws, hardcoded credentials, insecure defaults
-2. **Crash-level bugs** — null pointer dereferences, unhandled exceptions, resource leaks
-3. **Logic errors** — incorrect calculations, off-by-one, race conditions
-4. **Code quality** — dead code, deprecated dependencies with known CVEs
-{already_checked}
-
-## Process
-
-For each potential issue you find:
-1. **Reproduce it first** — run code, write a test, or demonstrate the failure
-2. Only file an issue if you have concrete reproduction evidence
-3. Do NOT file speculative issues ("this might be a problem")
-
-## For Each Confirmed Bug, File a GitHub Issue
-
-Use `gh issue create` with this format:
-```
-gh issue create --title "bug: <short description>" --body "..."
-```
-
-Issue body must include:
-- Reproduction steps (exact commands)
-- Evidence (paste the actual error output or failing test)
-- Suggested fix direction
-
-After filing, deduct 1 from your budget count.
-
-When you've filed {budget_remaining} issue(s) OR exhausted the codebase, stop and summarize:
-- How many issues found and filed
-- Areas checked
-- Recommended areas for next patrol
-"""
-
-
 def fix_issue_prompt(
     issue_number: int,
     issue_title: str,

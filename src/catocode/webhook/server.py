@@ -276,9 +276,9 @@ class WebhookServer:
                     self._post_pending_approval_comment(event, repo)
                 )
 
-        # Auto-index issues and record PR reviews for patrol dedup
+        # Keep issue/review metadata fresh for duplicate detection and repo maintenance.
         asyncio.ensure_future(
-            self._handle_patrol_side_effects(x_github_event, payload, repo_id)
+            self._handle_repo_side_effects(x_github_event, payload, repo_id)
         )
 
         self._store.mark_webhook_event_processed(x_github_delivery)
@@ -358,10 +358,10 @@ class WebhookServer:
         if activity.get("session_id") != session["id"]:
             self._store.update_activity(activity_id, session_id=session["id"])
 
-    async def _handle_patrol_side_effects(
+    async def _handle_repo_side_effects(
         self, event_type: str, payload: dict[str, Any], repo_id: str
     ) -> None:
-        """Handle side effects for patrol: index issues and record PR file reviews."""
+        """Handle background indexing side effects for issues and merged PRs."""
         try:
             repo = self._store.get_repo(repo_id)
             if repo is None:
@@ -413,7 +413,7 @@ class WebhookServer:
                             len(pr_files), pr_number, repo_id,
                         )
         except Exception as e:
-            logger.warning("Patrol side effects error for %s: %s", repo_id, e)
+            logger.warning("Repo side effects error for %s: %s", repo_id, e)
 
     async def _post_pending_approval_comment(self, event: Any, repo: dict) -> None:
         """Post a comment indicating the task request is awaiting admin approval."""
