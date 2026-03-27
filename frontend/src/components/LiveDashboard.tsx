@@ -1,11 +1,16 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import type { Stats, Activity, Repo } from "@/lib/types";
 import { getDashboard, getInstallUrl } from "@/lib/api";
 import { StatCard } from "@/components/StatCard";
 import { RepoList } from "@/components/RepoList";
 import { GroupedActivityTable } from "@/components/GroupedActivityTable";
+import {
+  DASHBOARD_REFRESH_INTERVAL_MS,
+  isDashboardDataStale,
+  shouldRefreshDashboardOnMount,
+} from "@/lib/dashboard-refresh";
 
 interface LiveDashboardProps {
   initialStats: Stats | null;
@@ -18,20 +23,63 @@ export function LiveDashboard({ initialStats, initialActivities, initialRepos }:
   const [activities, setActivities] = useState<Activity[]>(initialActivities);
   const [repos, setRepos] = useState<Repo[]>(initialRepos);
   const [installing, setInstalling] = useState(false);
+  const hasInitialData = Boolean(initialStats) || initialActivities.length > 0 || initialRepos.length > 0;
+  const lastLoadedAtRef = useRef(Date.now());
+  const refreshInFlightRef = useRef(false);
 
   const refresh = useCallback(async () => {
-    const data = await getDashboard();
-    if (!data) return;
-    if (data.stats) setStats(data.stats);
-    setActivities(data.activities);
-    setRepos(data.repos);
+    if (refreshInFlightRef.current) {
+      return;
+    }
+    refreshInFlightRef.current = true;
+    try {
+      const data = await getDashboard();
+      if (!data) return;
+      if (data.stats) setStats(data.stats);
+      setActivities(data.activities);
+      setRepos(data.repos);
+      lastLoadedAtRef.current = Date.now();
+    } finally {
+      refreshInFlightRef.current = false;
+    }
   }, []);
 
   useEffect(() => {
-    refresh();
-    const interval = setInterval(refresh, 5000);
-    return () => clearInterval(interval);
-  }, [refresh]);
+    if (
+      shouldRefreshDashboardOnMount({
+        hasInitialData,
+        lastLoadedAt: lastLoadedAtRef.current,
+      })
+    ) {
+      void refresh();
+    }
+
+    const tick = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      if (
+        isDashboardDataStale({
+          hasInitialData,
+          lastLoadedAt: lastLoadedAtRef.current,
+        })
+      ) {
+        void refresh();
+      }
+    };
+
+    const interval = window.setInterval(tick, DASHBOARD_REFRESH_INTERVAL_MS);
+    const onVisibilityChange = () => tick();
+    const onFocus = () => tick();
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [hasInitialData, refresh]);
 
   const displayActivities = stats?.recent_activities ?? activities;
 
