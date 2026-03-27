@@ -45,6 +45,13 @@ def test_root_path_redirects_to_frontend(tmp_path):
     assert resp.headers["location"] == "http://localhost:3000"
 
 
+def test_root_head_redirects_to_frontend(tmp_path):
+    client, _ = _make_client(tmp_path)
+    resp = client.head("/", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "http://localhost:3000"
+
+
 def test_api_requires_authentication(tmp_path):
     store = Store(db_path=tmp_path / "test.db")
     app = create_app(store=store, auth=StaticAuth())

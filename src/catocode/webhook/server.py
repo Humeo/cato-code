@@ -57,6 +57,7 @@ class WebhookServer:
 
         # GitHub App-level webhook (all events from all installations)
         self.app.get("/")(self._root_redirect)
+        self.app.head("/")(self._root_redirect)
         self.app.post("/webhook/app")(self._handle_app_webhook)
         self.app.get("/webhook/health")(self._health_check)
 
