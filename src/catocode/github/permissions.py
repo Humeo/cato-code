@@ -139,13 +139,6 @@ async def list_user_installation_repositories(
                 params={"per_page": 100, "page": page},
                 timeout=15.0,
             )
-            if response.status_code in {403, 404}:
-                logger.info(
-                    "User token cannot list repos for installation %s (HTTP %s)",
-                    installation_id,
-                    response.status_code,
-                )
-                return []
             response.raise_for_status()
 
             payload = response.json()
