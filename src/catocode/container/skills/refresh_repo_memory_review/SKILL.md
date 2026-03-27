@@ -34,6 +34,7 @@ Keep repo memory short, stable, and useful for the next session. Update it only 
    - `REPO_MEMORY_DECISION: update_claude_md`
    - `REPO_MEMORY_DECISION: skip_update`
    - Do not add any text after that final line.
+   - Do not include fenced JSON, ActivityResultEnvelope output, or any other structured artifact after the decision marker.
 
 ## What belongs in `CLAUDE.md`
 

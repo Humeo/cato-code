@@ -44,6 +44,7 @@ SETUP_WAIT_POLL_SECS = 1
 
 SETUP_STEP_KEYS = ("clone", "init_claude_md", "cg_index", "health_check")
 REPO_MEMORY_DECISION_RE = re.compile(r"REPO_MEMORY_DECISION:\s*(update_claude_md|skip_update)")
+TRAILING_FENCED_BLOCK_RE = re.compile(r"(?:\n|\A)\s*```[^\n]*\n[\s\S]*?\n```\s*$")
 INVALID_REPO_MEMORY_DECISION_SUMMARY = "Error: refresh review missing valid final decision marker"
 REPO_MEMORY_DEFAULT_SUMMARIES = {
     "skip_update": "Repo memory review completed without CLAUDE.md changes.",
@@ -1519,7 +1520,7 @@ def _extract_result_text(logs: list) -> str:
 
 
 def _extract_repo_memory_decision(result_text: str) -> str | None:
-    lines = [line.strip() for line in result_text.splitlines() if line.strip()]
+    lines = [line.strip() for line in _strip_trailing_fenced_blocks(result_text).splitlines() if line.strip()]
     if not lines:
         return None
     match = REPO_MEMORY_DECISION_RE.fullmatch(lines[-1])
@@ -1529,13 +1530,22 @@ def _extract_repo_memory_decision(result_text: str) -> str | None:
 
 
 def _extract_repo_memory_explanation(result_text: str) -> str | None:
-    lines = [line.strip() for line in result_text.splitlines() if line.strip()]
+    lines = [line.strip() for line in _strip_trailing_fenced_blocks(result_text).splitlines() if line.strip()]
     if len(lines) < 2:
         return None
     if REPO_MEMORY_DECISION_RE.fullmatch(lines[-1]) is None:
         return None
     explanation = "\n".join(lines[:-1]).strip()
     return explanation or None
+
+
+def _strip_trailing_fenced_blocks(result_text: str) -> str:
+    trimmed = result_text.rstrip()
+    while True:
+        match = TRAILING_FENCED_BLOCK_RE.search(trimmed)
+        if match is None:
+            return trimmed
+        trimmed = trimmed[:match.start()].rstrip()
 
 
 def _slugify(text: str) -> str:

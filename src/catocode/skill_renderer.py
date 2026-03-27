@@ -290,6 +290,7 @@ Your final line must be exactly one of:
 - `REPO_MEMORY_DECISION: skip_update`
 
 Place that decision marker on its own final line so it can be parsed reliably.
+Do not output fenced JSON or an ActivityResultEnvelope after the decision marker for this activity.
 
 Begin now.
 """

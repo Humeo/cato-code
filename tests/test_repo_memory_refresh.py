@@ -312,6 +312,55 @@ async def test_refresh_repo_memory_review_skip_update_summary_omits_marker_and_p
 
 
 @pytest.mark.asyncio
+async def test_refresh_repo_memory_review_accepts_marker_before_trailing_json_artifact(store, monkeypatch):
+    from catocode.dispatcher import dispatch
+
+    _repo_id, activity_id = _seed_ready_repo(store)
+    container_mgr = ReadyRefreshContainerManager()
+
+    monkeypatch.setattr("catocode.dispatcher._build_prompt", AsyncMock(return_value="refresh prompt"))
+    monkeypatch.setattr("catocode.dispatcher._index_repo_from_container", lambda *args, **kwargs: None)
+
+    async def fake_execute_sdk_runner(**kwargs):
+        store.add_log(
+            kwargs["activity_id"],
+            json.dumps(
+                {
+                    "type": "result",
+                    "result": (
+                        "No CLAUDE.md changes needed after reviewing merged PR #42.\n\n"
+                        "REPO_MEMORY_DECISION: skip_update\n\n"
+                        "```json\n"
+                        '{"artifacts":{"verification":{"status":"completed"}}}\n'
+                        "```"
+                    ),
+                }
+            ),
+        )
+        return 0, "session-json-tail", 0.15
+
+    monkeypatch.setattr("catocode.dispatcher._execute_sdk_runner", fake_execute_sdk_runner)
+
+    await dispatch(
+        activity_id=activity_id,
+        store=store,
+        container_mgr=container_mgr,
+        anthropic_api_key="sk-ant",
+        github_token="ghp-token",
+        verbose=False,
+    )
+
+    activity = store.get_activity(activity_id)
+    skip_step = store.get_activity_step(activity_id, "skip_update")
+
+    assert activity is not None
+    assert activity["status"] == "done"
+    assert activity["summary"] == "No CLAUDE.md changes needed after reviewing merged PR #42."
+    assert skip_step is not None
+    assert skip_step["reason"] == "No CLAUDE.md changes needed after reviewing merged PR #42."
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "result_text",
     [
