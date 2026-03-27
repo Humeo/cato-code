@@ -95,6 +95,26 @@ def test_api_stats_with_data(tmp_path):
     assert data["activities"]["by_kind"]["analyze_issue"] == 1
 
 
+def test_api_dashboard_payload_excludes_retired_patrol_activities(tmp_path):
+    client, store = _make_client(tmp_path)
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo("owner-repo", watch=1, installation_id="111")
+    analyze_id = store.add_activity("owner-repo", "analyze_issue", "issue:1")
+    store.update_activity(analyze_id, status="done", cost_usd=0.05)
+    patrol_id = store.add_activity("owner-repo", "patrol", "budget:5")
+    store.update_activity(patrol_id, status="failed")
+
+    with patch("catocode.api.routes.check_repo_write_access", return_value=(True, "write")):
+        resp = client.get("/api/dashboard")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert [repo["id"] for repo in data["repos"]] == ["owner-repo"]
+    assert data["stats"]["activities"]["total"] == 1
+    assert data["stats"]["activities"]["by_kind"] == {"analyze_issue": 1}
+    assert [activity["kind"] for activity in data["activities"]] == ["analyze_issue"]
+
+
 def test_api_repos(tmp_path):
     client, store = _make_client(tmp_path)
     store.add_repo("owner-repo", "https://github.com/owner/repo")

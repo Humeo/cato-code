@@ -1,23 +1,19 @@
 import { cookies } from "next/headers";
 
 import { LiveDashboard } from "@/components/LiveDashboard";
-import { getActivities, getRepos, getStats } from "@/lib/api";
+import { getDashboard } from "@/lib/api";
 
 export default async function DashboardPage() {
   const cookieHeader = (await cookies()).toString();
   const requestInit = cookieHeader ? { headers: { cookie: cookieHeader } } : undefined;
-  const [initialStats, initialActivities, initialRepos] = await Promise.all([
-    getStats(requestInit),
-    getActivities(requestInit),
-    getRepos(requestInit),
-  ]);
+  const initialDashboard = await getDashboard(requestInit);
 
   return (
     <div className="space-y-6">
       <LiveDashboard
-        initialStats={initialStats}
-        initialActivities={initialActivities ?? []}
-        initialRepos={initialRepos ?? []}
+        initialStats={initialDashboard?.stats ?? null}
+        initialActivities={initialDashboard?.activities ?? []}
+        initialRepos={initialDashboard?.repos ?? []}
       />
     </div>
   );

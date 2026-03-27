@@ -97,3 +97,9 @@ export interface Stats {
   cost_usd: number;
   recent_activities: Activity[];
 }
+
+export interface DashboardPayload {
+  stats: Stats | null;
+  activities: Activity[];
+  repos: Repo[];
+}

@@ -1,4 +1,4 @@
-import type { Stats, Repo, Activity, ActivityLog } from "./types";
+import type { Stats, Repo, Activity, ActivityLog, DashboardPayload } from "./types";
 
 // Server-side: use INTERNAL_API_URL (Docker service name) if set
 // Client-side: NEXT_PUBLIC_API_URL (browser-accessible host)
@@ -26,6 +26,10 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T | null> 
 
 export async function getStats(init?: RequestInit): Promise<Stats | null> {
   return apiFetch<Stats>("/api/stats", init);
+}
+
+export async function getDashboard(init?: RequestInit): Promise<DashboardPayload | null> {
+  return apiFetch<DashboardPayload>("/api/dashboard", init);
 }
 
 export async function getInstallUrl(): Promise<string | null> {

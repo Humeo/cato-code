@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import type { Stats, Activity, Repo } from "@/lib/types";
-import { getInstallUrl, getStats, getActivities, getRepos } from "@/lib/api";
+import { getDashboard, getInstallUrl } from "@/lib/api";
 import { StatCard } from "@/components/StatCard";
 import { RepoList } from "@/components/RepoList";
 import { GroupedActivityTable } from "@/components/GroupedActivityTable";
@@ -20,14 +20,11 @@ export function LiveDashboard({ initialStats, initialActivities, initialRepos }:
   const [installing, setInstalling] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [newStats, newActivities, newRepos] = await Promise.all([
-      getStats(),
-      getActivities(),
-      getRepos(),
-    ]);
-    if (newStats) setStats(newStats);
-    if (newActivities) setActivities(newActivities);
-    if (newRepos) setRepos(newRepos);
+    const data = await getDashboard();
+    if (!data) return;
+    if (data.stats) setStats(data.stats);
+    setActivities(data.activities);
+    setRepos(data.repos);
   }, []);
 
   useEffect(() => {

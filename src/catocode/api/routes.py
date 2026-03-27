@@ -298,6 +298,21 @@ def _build_stats_payload(store: Store, visible_repos: list[dict]) -> dict:
     }
 
 
+def _build_dashboard_payload(store: Store, visible_repos: list[dict]) -> dict:
+    repo_ids = {repo["id"] for repo in visible_repos}
+    activities = [
+        activity
+        for activity in store.list_activities()
+        if activity["repo_id"] in repo_ids and _is_visible_activity(activity)
+    ]
+    activities.sort(key=lambda item: item["updated_at"], reverse=True)
+    return {
+        "stats": _build_stats_payload(store, visible_repos),
+        "repos": visible_repos,
+        "activities": [_serialize_activity(activity, store) for activity in activities],
+    }
+
+
 def make_router(store: Store) -> APIRouter:
     """Return an APIRouter with the store injected via closure."""
     r = APIRouter(tags=["api"])
@@ -317,6 +332,11 @@ def make_router(store: Store) -> APIRouter:
     async def get_stats(current_user: CurrentUser) -> dict:
         repos = await _list_visible_repos(store, current_user)
         return _build_stats_payload(store, repos)
+
+    @r.get("/dashboard")
+    async def get_dashboard(current_user: CurrentUser) -> dict:
+        repos = await _list_visible_repos(store, current_user)
+        return _build_dashboard_payload(store, repos)
 
     @r.get("/repos")
     async def list_repos(current_user: CurrentUser) -> list[dict]:
