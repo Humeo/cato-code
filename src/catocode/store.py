@@ -1064,6 +1064,39 @@ class Store:
             return None
         return json.loads(row["payload"])
 
+    def get_runtime_session_resolution(self, session_id: str) -> dict | None:
+        session = self.get_runtime_session(session_id)
+        if session is None:
+            return None
+
+        hypotheses = self.list_runtime_session_hypotheses(session_id)
+        todos = self.list_runtime_session_todos(session_id)
+        checkpoints = self.list_runtime_session_checkpoints(session_id)
+        insights: list[dict] = []
+
+        raw_resolution_state = session.get("resolution_state")
+        parsed_resolution_state: dict | None = None
+        if isinstance(raw_resolution_state, str) and raw_resolution_state.strip():
+            try:
+                parsed = json.loads(raw_resolution_state)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                parsed_resolution_state = parsed
+                raw_insights = parsed.get("insights", [])
+                if isinstance(raw_insights, list):
+                    insights = [dict(item) for item in raw_insights if isinstance(item, dict)]
+
+        if not (hypotheses or todos or checkpoints or insights or parsed_resolution_state):
+            return None
+
+        return {
+            "hypotheses": hypotheses or list(parsed_resolution_state.get("hypotheses", [])) if parsed_resolution_state else hypotheses,
+            "todos": todos or list(parsed_resolution_state.get("todos", [])) if parsed_resolution_state else todos,
+            "checkpoints": checkpoints or list(parsed_resolution_state.get("checkpoints", [])) if parsed_resolution_state else checkpoints,
+            "insights": insights,
+        }
+
     def list_activities(self, repo_id: str | None = None, user_id: str | None = None) -> list[dict]:
         if repo_id is not None:
             return self._db.execute(

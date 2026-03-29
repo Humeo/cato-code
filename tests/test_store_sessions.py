@@ -161,6 +161,33 @@ def test_replace_runtime_session_resolution_persists_structured_records(store):
     ]
 
 
+def test_get_runtime_session_resolution_includes_json_only_insights(store):
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    session_id = store.create_runtime_session(
+        repo_id="owner-repo",
+        entry_kind="fix_issue",
+        status="active",
+        worktree_path="/repos/.worktrees/owner-repo/session-insights",
+        branch_name="catocode/session/session-insights",
+        issue_number=42,
+    )
+
+    store.replace_runtime_session_resolution(
+        session_id,
+        {
+            "hypotheses": [{"id": "h1", "summary": "Guard null input", "status": "active"}],
+            "todos": [{"id": "t1", "content": "Reproduce null input failure", "status": "done"}],
+            "checkpoints": [{"id": "c1", "label": "before-fix", "status": "done", "commit_sha": "abc123"}],
+            "insights": [{"hypothesis_id": "h1", "insight": "Null guard fixes repro", "impact": "support"}],
+        },
+    )
+
+    resolution = store.get_runtime_session_resolution(session_id)
+
+    assert resolution["hypotheses"][0]["id"] == "h1"
+    assert resolution["insights"] == [{"hypothesis_id": "h1", "insight": "Null guard fixes repro", "impact": "support"}]
+
+
 def test_get_latest_runtime_session_checkpoint_returns_latest_successful_checkpoint(store):
     store.add_repo("owner-repo", "https://github.com/owner/repo")
     session_id = store.create_runtime_session(
