@@ -3,6 +3,7 @@ export interface Repo {
   repo_url: string;
   watch: number;
   user_id: string | null;
+  manager_user_id?: string | null;
   lifecycle_status: string;
   last_ready_at: string | null;
   last_error: string | null;
@@ -106,4 +107,17 @@ export interface DashboardPayload {
   stats: Stats | null;
   activities: Activity[];
   repos: Repo[];
+}
+
+export interface CurrentUser {
+  id: string;
+  github_login: string;
+  github_email: string | null;
+  avatar_url: string | null;
+  created_at: string;
+  last_login_at: string;
+  is_whitelisted: boolean;
+  activity_quota_limit: number;
+  activity_quota_used: number;
+  activity_quota_remaining: number | null;
 }

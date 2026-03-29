@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import type { Stats, Activity, Repo } from "@/lib/types";
+import type { Stats, Activity, Repo, CurrentUser } from "@/lib/types";
 import { getDashboard, getInstallUrl } from "@/lib/api";
 import { StatCard } from "@/components/StatCard";
 import { RepoList } from "@/components/RepoList";
@@ -13,12 +13,13 @@ import {
 } from "@/lib/dashboard-refresh";
 
 interface LiveDashboardProps {
+  currentUser: CurrentUser | null;
   initialStats: Stats | null;
   initialActivities: Activity[];
   initialRepos: Repo[];
 }
 
-export function LiveDashboard({ initialStats, initialActivities, initialRepos }: LiveDashboardProps) {
+export function LiveDashboard({ currentUser, initialStats, initialActivities, initialRepos }: LiveDashboardProps) {
   const [stats, setStats] = useState<Stats | null>(initialStats);
   const [activities, setActivities] = useState<Activity[]>(initialActivities);
   const [repos, setRepos] = useState<Repo[]>(initialRepos);
@@ -120,6 +121,44 @@ export function LiveDashboard({ initialStats, initialActivities, initialRepos }:
             accent="text-amber-400"
           />
         </div>
+      )}
+
+      {currentUser && (
+        <section className="glass rounded-xl p-5">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              {currentUser.avatar_url ? (
+                <img
+                  src={currentUser.avatar_url}
+                  alt={currentUser.github_login}
+                  className="h-11 w-11 rounded-full border border-white/10 object-cover"
+                />
+              ) : (
+                <div className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm font-semibold text-white">
+                  {currentUser.github_login.slice(0, 1).toUpperCase()}
+                </div>
+              )}
+              <div>
+                <p className="text-xs uppercase tracking-[0.22em] text-gray-500">Signed In</p>
+                <p className="mt-1 text-sm font-medium text-white">{currentUser.github_login}</p>
+                {currentUser.github_email && <p className="text-xs text-gray-500">{currentUser.github_email}</p>}
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-xs uppercase tracking-[0.22em] text-gray-500">Usage</p>
+              <p className="mt-1 text-sm font-medium text-white">
+                {currentUser.is_whitelisted
+                  ? "Unlimited access"
+                  : `${currentUser.activity_quota_remaining ?? 0} / ${currentUser.activity_quota_limit} activities left`}
+              </p>
+              <p className="text-xs text-gray-500">
+                {currentUser.is_whitelisted
+                  ? "This account is on the allowlist."
+                  : `${currentUser.activity_quota_used} activities already consumed.`}
+              </p>
+            </div>
+          </div>
+        </section>
       )}
 
       {/* Watched Repositories — above activities */}

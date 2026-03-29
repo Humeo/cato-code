@@ -192,3 +192,108 @@ def test_issue_approve_after_analysis_queues_fix_issue_on_same_runtime_session(t
     assert fix_activity["trigger"] == "issue:42"
     assert fix_activity["status"] == "pending"
     assert fix_activity["session_id"] == issue_session_id
+
+
+def test_issue_opened_webhook_skips_activity_when_repo_manager_quota_exhausted(tmp_path, monkeypatch):
+    monkeypatch.delenv("CATOCODE_USER_WHITELIST", raising=False)
+    store = Store(db_path=tmp_path / "test.db")
+    _seed_repo(store)
+    store.create_user(
+        user_id="user-1",
+        github_id=1,
+        github_login="octocat",
+        github_email="octocat@example.com",
+        avatar_url=None,
+        access_token="encrypted",
+    )
+    store.update_repo("owner-repo", manager_user_id="user-1")
+    for n in range(10):
+        store.record_user_activity_usage(
+            user_id="user-1",
+            repo_id="owner-repo",
+            activity_id=f"activity-{n}",
+            activity_kind="analyze_issue",
+        )
+
+    client = _make_client(store)
+
+    payload = {
+        "action": "opened",
+        "issue": {"number": 42, "title": "Bug"},
+        "repository": {"html_url": "https://github.com/owner/repo"},
+        "sender": {"login": "reporter"},
+    }
+
+    resp = client.post(
+        "/webhook/app",
+        content=json.dumps(payload).encode(),
+        headers={
+            "X-GitHub-Event": "issues",
+            "X-GitHub-Delivery": "delivery-issue-42-quota",
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "quota_exceeded"
+    assert store.list_activities("owner-repo") == []
+
+
+def test_issue_approve_returns_quota_exceeded_when_fix_cannot_be_queued(tmp_path, monkeypatch):
+    monkeypatch.delenv("CATOCODE_USER_WHITELIST", raising=False)
+    store = Store(db_path=tmp_path / "test.db")
+    _seed_repo(store)
+    store.create_user(
+        user_id="user-1",
+        github_id=1,
+        github_login="octocat",
+        github_email="octocat@example.com",
+        avatar_url=None,
+        access_token="encrypted",
+    )
+    store.update_repo("owner-repo", manager_user_id="user-1")
+    for n in range(10):
+        store.record_user_activity_usage(
+            user_id="user-1",
+            repo_id="owner-repo",
+            activity_id=f"activity-{n}",
+            activity_kind="fix_issue",
+        )
+
+    issue_session_id = store.create_runtime_session(
+        repo_id="owner-repo",
+        entry_kind="analyze_issue",
+        status="active",
+        worktree_path="/repos/.worktrees/owner-repo/session-issue-42",
+        branch_name="catocode/session/session-issue-42",
+        issue_number=42,
+    )
+    analyze_activity_id = store.add_activity("owner-repo", "analyze_issue", "issue:42")
+    store.update_activity(analyze_activity_id, session_id=issue_session_id, status="done", summary="analysis posted")
+
+    async def fake_check_user_is_admin(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr("catocode.decision.check_user_is_admin", fake_check_user_is_admin)
+    client = _make_client(store)
+    payload = {
+        "action": "created",
+        "issue": {"number": 42},
+        "comment": {"id": 333, "body": "/approve", "html_url": "https://github.com/owner/repo/issues/42#issuecomment-333"},
+        "repository": {"html_url": "https://github.com/owner/repo"},
+        "sender": {"login": "maintainer"},
+    }
+
+    resp = client.post(
+        "/webhook/app",
+        content=json.dumps(payload).encode(),
+        headers={
+            "X-GitHub-Event": "issue_comment",
+            "X-GitHub-Delivery": "delivery-approve-fix-42-quota",
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "quota_exceeded"
+    assert [activity["kind"] for activity in store.list_activities("owner-repo")] == ["analyze_issue"]

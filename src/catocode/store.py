@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS repos (
     id TEXT PRIMARY KEY,
     repo_url TEXT NOT NULL,
     installation_id TEXT,
+    manager_user_id TEXT,
     watch INTEGER DEFAULT 0,
     lifecycle_status TEXT DEFAULT 'watched',
     last_etag TEXT,
@@ -139,6 +140,16 @@ CREATE TABLE IF NOT EXISTS user_installation_repo_sync (
     repo_count INTEGER DEFAULT 0,
     last_error TEXT,
     PRIMARY KEY (user_id, installation_id)
+);
+
+CREATE TABLE IF NOT EXISTS user_activity_usage (
+    activity_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    activity_kind TEXT NOT NULL,
+    charged_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (repo_id) REFERENCES repos(id)
 );
 
 CREATE TABLE IF NOT EXISTS install_states (
@@ -329,6 +340,7 @@ CREATE INDEX IF NOT EXISTS idx_runtime_sessions_repo_status ON runtime_sessions(
 CREATE INDEX IF NOT EXISTS idx_runtime_session_issue_repo_issue ON runtime_session_issue_links(repo_id, issue_number, created_at);
 CREATE INDEX IF NOT EXISTS idx_runtime_session_pr_repo_pr ON runtime_session_pr_links(repo_id, pr_number, created_at);
 CREATE INDEX IF NOT EXISTS idx_user_visible_repos_user_repo ON user_visible_repos(user_id, repo_id);
+CREATE INDEX IF NOT EXISTS idx_user_activity_usage_user_charged ON user_activity_usage(user_id, charged_at);
 """
 
 # Migrations: columns added after initial schema
@@ -342,6 +354,7 @@ _MIGRATIONS = [
     "ALTER TABLE repos ADD COLUMN last_error TEXT",
     "ALTER TABLE repos ADD COLUMN last_setup_activity_id TEXT",
     "ALTER TABLE repos ADD COLUMN installation_id TEXT",
+    "ALTER TABLE repos ADD COLUMN manager_user_id TEXT",
     "ALTER TABLE activities ADD COLUMN requires_approval INTEGER DEFAULT 0",
     "ALTER TABLE activities ADD COLUMN approval_comment_url TEXT",
     "ALTER TABLE activities ADD COLUMN approved_by TEXT",
@@ -365,7 +378,17 @@ _MIGRATIONS = [
     last_error TEXT,
     PRIMARY KEY (user_id, installation_id)
 )""",
+    """CREATE TABLE IF NOT EXISTS user_activity_usage (
+    activity_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    activity_kind TEXT NOT NULL,
+    charged_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (repo_id) REFERENCES repos(id)
+)""",
     "CREATE INDEX IF NOT EXISTS idx_user_visible_repos_user_repo ON user_visible_repos(user_id, repo_id)",
+    "CREATE INDEX IF NOT EXISTS idx_user_activity_usage_user_charged ON user_activity_usage(user_id, charged_at)",
     "ALTER TABLE repos ADD COLUMN patrol_enabled INTEGER DEFAULT 0",
     "ALTER TABLE repos ADD COLUMN patrol_max_issues INTEGER DEFAULT 5",
     "ALTER TABLE repos ADD COLUMN patrol_window_hours INTEGER DEFAULT 12",
@@ -1723,6 +1746,35 @@ class Store:
                ORDER BY repo_id""",
             (user_id,),
         )
+
+    def record_user_activity_usage(
+        self,
+        user_id: str,
+        repo_id: str,
+        activity_id: str,
+        activity_kind: str,
+    ) -> None:
+        self._db.execute(
+            """INSERT OR IGNORE INTO user_activity_usage
+               (activity_id, user_id, repo_id, activity_kind, charged_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (activity_id, user_id, repo_id, activity_kind, _now()),
+        )
+        self._db.commit()
+
+    def get_user_activity_usage_count(self, user_id: str) -> int:
+        row = self._db.execute_one(
+            "SELECT COUNT(*) AS c FROM user_activity_usage WHERE user_id = ?",
+            (user_id,),
+        )
+        return int(row["c"]) if row else 0
+
+    def get_user_activity_quota(self, user_id: str, limit: int = 10) -> dict[str, int]:
+        used = self.get_user_activity_usage_count(user_id)
+        return {
+            "used": used,
+            "remaining": max(limit - used, 0),
+        }
 
     # --- users ---
 

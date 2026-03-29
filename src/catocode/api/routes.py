@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from ..config import get_github_app_name, parse_repo_url
+from ..entitlements import build_user_quota_payload, user_can_trigger_activity
 from ..github.permissions import check_repo_write_access, list_user_installation_repositories
 from ..store import Store
 from .crypto import decrypt_token
@@ -96,7 +97,12 @@ def _find_reusable_setup_activity(store: Store, repo_id: str) -> dict | None:
     return None
 
 
-def _queue_repo_setup(store: Store, repo_id: str, trigger: str) -> tuple[str | None, str]:
+def _queue_repo_setup(
+    store: Store,
+    repo_id: str,
+    trigger: str,
+    current_user: dict | None = None,
+) -> tuple[str | None, str]:
     repo = store.get_repo(repo_id)
     if repo is None:
         raise HTTPException(status_code=404, detail="Repo not found")
@@ -110,7 +116,16 @@ def _queue_repo_setup(store: Store, repo_id: str, trigger: str) -> tuple[str | N
     if active_setup is not None:
         activity_id = active_setup["id"]
     else:
+        if current_user is not None:
+            _ensure_user_can_trigger_activity(store, current_user)
         activity_id = store.add_activity(repo_id, "setup", trigger)
+        if current_user is not None:
+            store.record_user_activity_usage(
+                user_id=current_user["id"],
+                repo_id=repo_id,
+                activity_id=activity_id,
+                activity_kind="setup",
+            )
 
     store.update_repo_lifecycle(
         repo_id,
@@ -119,6 +134,11 @@ def _queue_repo_setup(store: Store, repo_id: str, trigger: str) -> tuple[str | N
         last_setup_activity_id=activity_id,
     )
     return activity_id, "queued"
+
+
+def _ensure_user_can_trigger_activity(store: Store, current_user: dict) -> None:
+    if not user_can_trigger_activity(store, current_user):
+        raise HTTPException(status_code=403, detail="Activity quota exceeded")
 
 
 def _get_user_github_token(current_user: dict) -> str:
@@ -362,7 +382,7 @@ def make_router(store: Store) -> APIRouter:
 
     @r.get("/me")
     async def get_me(current_user: CurrentUser) -> dict:
-        return {
+        payload = {
             "id": current_user["id"],
             "github_login": current_user["github_login"],
             "github_email": current_user["github_email"],
@@ -370,6 +390,8 @@ def make_router(store: Store) -> APIRouter:
             "created_at": current_user["created_at"],
             "last_login_at": current_user["last_login_at"],
         }
+        payload.update(build_user_quota_payload(store, current_user))
+        return payload
 
     @r.get("/stats")
     async def get_stats(current_user: CurrentUser) -> dict:
@@ -412,11 +434,19 @@ def make_router(store: Store) -> APIRouter:
 
     @r.post("/repos/{repo_id}/setup/retry")
     async def retry_setup(repo_id: str, current_user: CurrentUser) -> dict:
-        await _require_visible_repo(store, repo_id, current_user)
+        repo = await _require_visible_repo(store, repo_id, current_user)
+        should_assign_manager = not repo.get("manager_user_id")
 
         setup_activity = _find_reusable_setup_activity(store, repo_id)
         if setup_activity is None:
+            _ensure_user_can_trigger_activity(store, current_user)
             activity_id = store.add_activity(repo_id, "setup", "retry_setup")
+            store.record_user_activity_usage(
+                user_id=current_user["id"],
+                repo_id=repo_id,
+                activity_id=activity_id,
+                activity_kind="setup",
+            )
         else:
             activity_id = setup_activity["id"]
 
@@ -426,12 +456,18 @@ def make_router(store: Store) -> APIRouter:
             last_error=None,
             last_setup_activity_id=activity_id,
         )
+        if should_assign_manager:
+            store.update_repo(repo_id, manager_user_id=current_user["id"], user_id=current_user["id"])
         return {"status": "queued", "activity_id": activity_id}
 
     @r.post("/repos/{repo_id}/watch")
     async def watch_repo(repo_id: str, current_user: CurrentUser) -> dict:
         await _require_visible_repo(store, repo_id, current_user)
-        activity_id, status = _queue_repo_setup(store, repo_id, "watch")
+        repo = store.get_repo(repo_id)
+        should_assign_manager = repo is not None and (not repo.get("manager_user_id") or not repo.get("watch"))
+        activity_id, status = _queue_repo_setup(store, repo_id, "watch", current_user=current_user)
+        if should_assign_manager:
+            store.update_repo(repo_id, manager_user_id=current_user["id"], user_id=current_user["id"])
         return {"status": status, "activity_id": activity_id}
 
     @r.delete("/repos/{repo_id}/watch")

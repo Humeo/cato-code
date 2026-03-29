@@ -255,6 +255,8 @@ Edit `.env`:
 | `CATOCODE_BASE_URL` | Yes | Backend base URL, e.g. `https://catocode.example.com` |
 | `FRONTEND_URL` | Yes | Frontend base URL, e.g. `https://app.catocode.example.com` |
 | `SESSION_SECRET_KEY` | Yes | Session + token encryption secret |
+| `CATOCODE_USER_WHITELIST` |          | Comma-separated GitHub logins with unlimited activity usage |
+| `CATOCODE_NON_WHITELIST_ACTIVITY_LIMIT` |          | Per-user activity cap for non-whitelisted users (default: `10`) |
 | `PORT`              |          | Service port (default: `8000`)                      |
 | `GIT_USER_NAME`     |          | Commit author name (default: `CatoCode`)            |
 | `GIT_USER_EMAIL`    |          | Commit author email (default: `catocode@bot.local`) |
@@ -292,6 +294,8 @@ Multiple repos are supported. Installation only makes them visible; `Watch` is t
 The dashboard starts automatically with `docker compose up -d`. Open [http://localhost:3000](http://localhost:3000).
 
 Features: aggregated dashboard state, live log streaming (SSE), watch/setup lifecycle, retry setup, cost tracking.
+
+The dashboard header also shows the signed-in GitHub profile and activity allowance. Whitelisted accounts have unlimited usage; non-whitelisted accounts are capped by `CATOCODE_NON_WHITELIST_ACTIVITY_LIMIT`.
 
 > To point at a remote backend, set `NEXT_PUBLIC_API_URL=http://your-server:8000` in `.env`, then run `docker compose up -d --build frontend`.
 

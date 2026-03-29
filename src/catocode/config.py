@@ -98,6 +98,21 @@ def get_git_user_email() -> str:
     """Get git user email from GIT_USER_EMAIL env var."""
     return os.environ.get("GIT_USER_EMAIL", "catocode@bot.local")
 
+
+def get_user_whitelist() -> set[str]:
+    """Return normalized GitHub logins allowed unlimited platform activity."""
+    raw = os.environ.get("CATOCODE_USER_WHITELIST", "")
+    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+
+def get_non_whitelist_activity_limit() -> int:
+    """Return the activity limit for non-whitelisted users."""
+    raw = os.environ.get("CATOCODE_NON_WHITELIST_ACTIVITY_LIMIT", "10").strip()
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        return 10
+
 def parse_issue_url(url: str) -> tuple[str, str, int]:
     """Parse GitHub issue URL into (owner, repo, issue_number)."""
     match = re.match(

@@ -13,8 +13,15 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 from ..auth import Auth, get_auth
 from ..auth.base import GitHubAppTokenProvider
-from ..config import get_frontend_url, get_github_app_webhook_secret, parse_repo_url, repo_id_from_url
+from ..config import (
+    get_frontend_url,
+    get_github_app_webhook_secret,
+    get_non_whitelist_activity_limit,
+    parse_repo_url,
+    repo_id_from_url,
+)
 from ..decision import decide_engagement
+from ..entitlements import is_whitelisted_login, repo_manager_user
 from ..github.commenter import post_issue_comment
 from ..session_runtime import approval_scope_from_trigger, resolve_runtime_session_for_activity
 from ..store import Store
@@ -74,14 +81,44 @@ class WebhookServer:
             return await self._auth.get_installation_token(installation_id)
         return await self._auth.get_token()
 
-    async def _handle_approval(self, event: Any, payload: dict[str, Any]) -> None:
+    def _allow_repo_manager_activity(self, repo_id: str, activity_kind: str) -> tuple[bool, dict | None]:
+        repo = self._store.get_repo(repo_id)
+        manager = repo_manager_user(self._store, repo)
+        if manager is None:
+            return True, None
+        if is_whitelisted_login(manager.get("github_login")):
+            return True, manager
+        if self._store.get_user_activity_usage_count(manager["id"]) >= get_non_whitelist_activity_limit():
+            logger.info(
+                "Skipped %s for repo %s because manager %s exhausted activity quota",
+                activity_kind,
+                repo_id,
+                manager.get("github_login"),
+            )
+            return False, manager
+        return True, manager
+
+    def _record_manager_activity_usage(
+        self,
+        manager: dict | None,
+        repo_id: str,
+        activity_id: str,
+        activity_kind: str,
+    ) -> None:
+        if manager is None:
+            return
+        if is_whitelisted_login(manager.get("github_login")):
+            return
+        self._store.record_user_activity_usage(manager["id"], repo_id, activity_id, activity_kind)
+
+    async def _handle_approval(self, event: Any, payload: dict[str, Any]) -> str:
         """Handle approval comment by transitioning pending_approval activity to pending."""
         from ..decision import check_user_is_admin
 
         trigger_parts = event.trigger.split(":")
         if len(trigger_parts) < 2:
             logger.warning("Invalid trigger format for approval: %s", event.trigger)
-            return
+            return "ignored"
 
         issue_or_pr = f"{trigger_parts[0]}:{trigger_parts[1]}"
 
@@ -96,20 +133,20 @@ class WebhookServer:
         repo = self._store.get_repo(event.repo_id)
         if repo is None:
             logger.error("Repository not found: %s", event.repo_id)
-            return
+            return "ignored"
 
         try:
             owner, repo_name = parse_repo_url(repo["repo_url"])
         except ValueError:
             logger.error("Invalid repo URL: %s", repo["repo_url"])
-            return
+            return "ignored"
 
         github_token = await self._resolve_repo_github_token(repo)
         is_admin = await check_user_is_admin(comment_author, owner, repo_name, github_token)
 
         if not is_admin:
             logger.warning("User %s attempted to approve but lacks permissions", comment_author)
-            return
+            return "ignored"
 
         comment_url = payload.get("comment", {}).get("html_url", "")
         if matching_activity is not None:
@@ -121,13 +158,17 @@ class WebhookServer:
                 approval_comment_url=comment_url,
             )
             logger.info("Activity %s approved by %s", matching_activity["id"][:8], comment_author)
-            return
+            return "approved"
 
         if issue_or_pr.startswith("issue:"):
-            self._queue_issue_fix_after_approval(event.repo_id, issue_or_pr, comment_author, comment_url)
-            return
+            queued = self._queue_issue_fix_after_approval(event.repo_id, issue_or_pr, comment_author, comment_url)
+            if not queued:
+                logger.info("Skipped fix_issue queue for %s after approval", issue_or_pr)
+                return "quota_exceeded"
+            return "approved"
 
         logger.warning("No pending approval activity found for: %s", issue_or_pr)
+        return "ignored"
 
     def _queue_issue_fix_after_approval(
         self,
@@ -135,10 +176,10 @@ class WebhookServer:
         issue_trigger: str,
         approved_by: str,
         comment_url: str,
-    ) -> None:
+    ) -> bool:
         if self._store.has_inflight_activity(repo_id, "fix_issue", issue_trigger):
             logger.info("Skipped duplicate fix_issue queue for %s", issue_trigger)
-            return
+            return True
 
         issue_session_id: str | None = None
         has_completed_analysis = False
@@ -152,9 +193,14 @@ class WebhookServer:
 
         if not has_completed_analysis:
             logger.warning("Approval received for %s but no completed analyze_issue found", issue_trigger)
-            return
+            return False
+
+        allowed, manager = self._allow_repo_manager_activity(repo_id, "fix_issue")
+        if not allowed:
+            return False
 
         fix_activity_id = self._store.add_activity(repo_id, "fix_issue", issue_trigger)
+        self._record_manager_activity_usage(manager, repo_id, fix_activity_id, "fix_issue")
         if issue_session_id:
             self._store.update_activity(fix_activity_id, session_id=issue_session_id)
         self._store.update_activity(
@@ -164,6 +210,7 @@ class WebhookServer:
         )
         self._attach_runtime_session(fix_activity_id)
         logger.info("Queued fix_issue %s after approval for %s", fix_activity_id[:8], issue_trigger)
+        return True
 
     async def _handle_app_webhook(
         self,
@@ -262,11 +309,17 @@ class WebhookServer:
             return JSONResponse({"status": "no_action", "reason": decision.reason})
 
         if decision.activity_kind == "approve_activity":
-            await self._handle_approval(event, payload)
+            approval_status = await self._handle_approval(event, payload)
             self._store.mark_webhook_event_processed(x_github_delivery)
-            return JSONResponse({"status": "approved"})
+            return JSONResponse({"status": approval_status})
+
+        allowed, manager = self._allow_repo_manager_activity(repo_id, decision.activity_kind or "")
+        if not allowed:
+            self._store.mark_webhook_event_processed(x_github_delivery)
+            return JSONResponse({"status": "quota_exceeded", "activity_kind": decision.activity_kind})
 
         activity_id = self._store.add_activity(repo_id, decision.activity_kind or "", event.trigger)
+        self._record_manager_activity_usage(manager, repo_id, activity_id, decision.activity_kind or "")
         self._attach_runtime_session(activity_id)
         if decision.requires_approval:
             self._store.update_activity(activity_id, requires_approval=1)
@@ -307,6 +360,10 @@ class WebhookServer:
         if pr_number is None or not merge_commit_sha:
             return None
 
+        allowed, manager = self._allow_repo_manager_activity(repo_id, "refresh_repo_memory_review")
+        if not allowed:
+            return "quota_exceeded"
+
         activity_id = self._store.enqueue_refresh_repo_memory_review(
             repo_id=repo_id,
             pr_number=pr_number,
@@ -320,6 +377,7 @@ class WebhookServer:
                 repo_id,
             )
             return "duplicate_inflight"
+        self._record_manager_activity_usage(manager, repo_id, activity_id, "refresh_repo_memory_review")
         self._attach_runtime_session(activity_id)
         logger.info("Queued repo memory refresh for merged PR #%s in %s", pr_number, repo_id)
         return "queued_repo_memory_refresh"

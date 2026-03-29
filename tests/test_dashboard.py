@@ -38,6 +38,23 @@ def _make_client(tmp_path: Path) -> tuple[TestClient, Store]:
     return client, store
 
 
+def _make_second_client(store: Store) -> TestClient:
+    store.create_user(
+        user_id="user-2",
+        github_id=2,
+        github_login="hubot",
+        github_email="hubot@example.com",
+        avatar_url="https://avatars.example/hubot.png",
+        access_token=encrypt_token("ghu_user_token_2"),
+    )
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    store.create_session("session-2", "user-2", expires_at)
+    app = create_app(store=store, auth=StaticAuth())
+    client = TestClient(app)
+    client.cookies.set("session", "session-2")
+    return client
+
+
 def test_root_path_redirects_to_frontend(tmp_path):
     client, _ = _make_client(tmp_path)
     resp = client.get("/", follow_redirects=False)
@@ -71,6 +88,44 @@ def test_api_stats_empty(tmp_path):
     assert data["repos"]["watched"] == 0
     assert data["activities"]["total"] == 0
     assert data["cost_usd"] == 0.0
+
+
+def test_api_me_includes_profile_and_quota(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATOCODE_USER_WHITELIST", "octocat,staff-user")
+    client, _ = _make_client(tmp_path)
+
+    resp = client.get("/api/me")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["github_login"] == "octocat"
+    assert data["github_email"] == "octocat@example.com"
+    assert data["avatar_url"] is None
+    assert data["is_whitelisted"] is True
+    assert data["activity_quota_limit"] == 10
+    assert data["activity_quota_used"] == 0
+    assert data["activity_quota_remaining"] is None
+
+
+def test_multiple_logged_in_users_can_access_shared_repo_and_own_profiles(tmp_path):
+    client1, store = _make_client(tmp_path)
+    client2 = _make_second_client(store)
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo("owner-repo", installation_id="111", manager_user_id="user-1", user_id="user-1")
+    store.replace_user_visible_repos("user-1", "111", [{"repo_id": "owner-repo", "permission": "write"}])
+    store.replace_user_visible_repos("user-2", "111", [{"repo_id": "owner-repo", "permission": "write"}])
+
+    me1 = client1.get("/api/me")
+    me2 = client2.get("/api/me")
+    repos1 = client1.get("/api/repos")
+    repos2 = client2.get("/api/repos")
+
+    assert me1.status_code == 200
+    assert me2.status_code == 200
+    assert me1.json()["github_login"] == "octocat"
+    assert me2.json()["github_login"] == "hubot"
+    assert [repo["id"] for repo in repos1.json()] == ["owner-repo"]
+    assert [repo["id"] for repo in repos2.json()] == ["owner-repo"]
 
 
 def test_api_stats_with_data(tmp_path):
@@ -361,6 +416,72 @@ def test_api_watch_repo_marks_repo_watched_and_queues_setup(tmp_path):
     assert repo["watch"] == 1
     assert repo["lifecycle_status"] == "setting_up"
     assert repo["last_setup_activity_id"] == activity["id"]
+
+
+def test_api_watch_repo_records_manager_and_charges_quota(tmp_path, monkeypatch):
+    monkeypatch.delenv("CATOCODE_USER_WHITELIST", raising=False)
+    client, store = _make_client(tmp_path)
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo("owner-repo", installation_id="111")
+
+    with patch("catocode.api.routes.check_repo_write_access", return_value=(True, "write")):
+        resp = client.post("/api/repos/owner-repo/watch")
+
+    assert resp.status_code == 200
+    repo = store.get_repo("owner-repo")
+    assert repo is not None
+    assert repo["manager_user_id"] == "user-1"
+    quota = store.get_user_activity_quota("user-1")
+    assert quota["used"] == 1
+    assert quota["remaining"] == 9
+
+
+def test_api_watch_repo_blocks_non_whitelisted_user_after_quota_exhausted(tmp_path, monkeypatch):
+    monkeypatch.delenv("CATOCODE_USER_WHITELIST", raising=False)
+    client, store = _make_client(tmp_path)
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo("owner-repo", installation_id="111")
+    for n in range(10):
+        store.record_user_activity_usage(
+            user_id="user-1",
+            repo_id="owner-repo",
+            activity_id=f"activity-{n}",
+            activity_kind="setup",
+        )
+
+    with patch("catocode.api.routes.check_repo_write_access", return_value=(True, "write")):
+        resp = client.post("/api/repos/owner-repo/watch")
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Activity quota exceeded"
+
+
+def test_api_retry_setup_blocks_non_whitelisted_user_after_quota_exhausted(tmp_path, monkeypatch):
+    monkeypatch.delenv("CATOCODE_USER_WHITELIST", raising=False)
+    client, store = _make_client(tmp_path)
+    store.add_repo("owner-repo", "https://github.com/owner/repo")
+    store.update_repo("owner-repo", installation_id="111")
+    failed_setup_id = store.add_activity("owner-repo", "setup", "watch")
+    store.update_activity(failed_setup_id, status="failed", summary="init failed")
+    store.update_repo_lifecycle(
+        "owner-repo",
+        lifecycle_status="error",
+        last_error="init failed",
+        last_setup_activity_id=failed_setup_id,
+    )
+    for n in range(10):
+        store.record_user_activity_usage(
+            user_id="user-1",
+            repo_id="owner-repo",
+            activity_id=f"activity-{n}",
+            activity_kind="setup",
+        )
+
+    with patch("catocode.api.routes.check_repo_write_access", return_value=(True, "write")):
+        resp = client.post("/api/repos/owner-repo/setup/retry")
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Activity quota exceeded"
 
 
 def test_api_watch_ready_repo_is_idempotent(tmp_path):
