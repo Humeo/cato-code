@@ -268,6 +268,9 @@ async def test_dispatch_fix_issue_uses_runtime_session_worktree_and_persists_sdk
             "impact": "confirm",
         }
     ]
+    steps = {step["step_key"]: step for step in store.list_activity_steps(activity_id)}
+    assert set(steps) == {"verification", "resolution", "checkpoint:verified-fix"}
+    assert steps["resolution"]["reason"] == "1 hypotheses, 1 todos, 1 checkpoints, 1 insights"
     linked_pr_session = store.find_pr_runtime_session("owner-repo", 101)
     assert linked_pr_session is not None
     assert linked_pr_session["id"] == runtime_session_id

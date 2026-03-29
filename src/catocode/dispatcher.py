@@ -1411,6 +1411,25 @@ def _mark_runtime_session_needs_recovery(
 
 
 def _record_runtime_result_steps(store: "Store", activity_id: str, runtime_result: ActivityResultEnvelope) -> None:
+    localization = runtime_result.artifacts.get("localization")
+    if isinstance(localization, dict):
+        finish_reason = localization.get("finish_reason")
+        ranked_locations = localization.get("ranked_locations")
+        ranked_count = len(ranked_locations) if isinstance(ranked_locations, list) else 0
+        reason = finish_reason if isinstance(finish_reason, str) and finish_reason else None
+        if reason is None and ranked_count:
+            reason = f"{ranked_count} ranked locations"
+        store.upsert_activity_step(
+            activity_id,
+            "localization",
+            status="done",
+            reason=reason,
+            metadata={
+                "finish_reason": finish_reason,
+                "ranked_count": ranked_count,
+            },
+        )
+
     verification = runtime_result.artifacts.get("verification")
     if isinstance(verification, dict):
         verification_status = verification.get("status")
@@ -1427,6 +1446,26 @@ def _record_runtime_result_steps(store: "Store", activity_id: str, runtime_resul
     resolution_state = _normalize_resolution_state(runtime_result)
     if resolution_state is None:
         return
+
+    hypothesis_count = len(resolution_state["hypotheses"])
+    todo_count = len(resolution_state["todos"])
+    checkpoint_count = len(resolution_state["checkpoints"])
+    insight_count = len(resolution_state["insights"])
+    store.upsert_activity_step(
+        activity_id,
+        "resolution",
+        status="done",
+        reason=(
+            f"{hypothesis_count} hypotheses, {todo_count} todos, "
+            f"{checkpoint_count} checkpoints, {insight_count} insights"
+        ),
+        metadata={
+            "hypothesis_count": hypothesis_count,
+            "todo_count": todo_count,
+            "checkpoint_count": checkpoint_count,
+            "insight_count": insight_count,
+        },
+    )
 
     for index, checkpoint in enumerate(resolution_state["checkpoints"], start=1):
         label = checkpoint.get("label") or checkpoint.get("id") or f"checkpoint-{index}"

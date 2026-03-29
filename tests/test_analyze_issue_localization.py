@@ -141,6 +141,9 @@ async def test_dispatch_analyze_issue_persists_localization_artifact_for_later_f
     assert activity is not None
     metadata = json.loads(activity["metadata"])
     assert metadata["runtime_result"]["artifacts"]["localization"]["ranked_locations"][0]["rank"] == 1
+    steps = store.list_activity_steps(activity_id)
+    assert [step["step_key"] for step in steps] == ["localization"]
+    assert steps[0]["reason"] == "sufficient_context"
 
     runtime_session = store.get_runtime_session(activity["session_id"])
     assert runtime_session is not None
