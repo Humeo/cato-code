@@ -116,8 +116,6 @@ def _queue_repo_setup(
     if active_setup is not None:
         activity_id = active_setup["id"]
     else:
-        if current_user is not None:
-            _ensure_user_can_trigger_activity(store, current_user)
         activity_id = store.add_activity(repo_id, "setup", trigger)
         if current_user is not None:
             store.record_user_activity_usage(
@@ -139,6 +137,25 @@ def _queue_repo_setup(
 def _ensure_user_can_trigger_activity(store: Store, current_user: dict) -> None:
     if not user_can_trigger_activity(store, current_user):
         raise HTTPException(status_code=403, detail="Activity quota exceeded")
+
+
+def _watch_requires_quota_check(store: Store, repo: dict, current_user: dict | None) -> bool:
+    if current_user is None:
+        return False
+    will_enable_watch = not repo.get("watch")
+    will_assign_manager = not repo.get("manager_user_id") or not repo.get("watch")
+    will_create_setup_activity = (
+        repo.get("lifecycle_status") != "ready" and _find_reusable_setup_activity(store, repo["id"]) is None
+    )
+    return will_enable_watch or will_assign_manager or will_create_setup_activity
+
+
+def _retry_requires_quota_check(store: Store, repo: dict, current_user: dict | None) -> bool:
+    if current_user is None:
+        return False
+    will_assign_manager = repo.get("manager_user_id") != current_user["id"]
+    will_create_setup_activity = _find_reusable_setup_activity(store, repo["id"]) is None
+    return will_assign_manager or will_create_setup_activity
 
 
 def _get_user_github_token(current_user: dict) -> str:
@@ -435,11 +452,12 @@ def make_router(store: Store) -> APIRouter:
     @r.post("/repos/{repo_id}/setup/retry")
     async def retry_setup(repo_id: str, current_user: CurrentUser) -> dict:
         repo = await _require_visible_repo(store, repo_id, current_user)
-        should_assign_manager = not repo.get("manager_user_id")
+        should_assign_manager = repo.get("manager_user_id") != current_user["id"]
+        if _retry_requires_quota_check(store, repo, current_user):
+            _ensure_user_can_trigger_activity(store, current_user)
 
         setup_activity = _find_reusable_setup_activity(store, repo_id)
         if setup_activity is None:
-            _ensure_user_can_trigger_activity(store, current_user)
             activity_id = store.add_activity(repo_id, "setup", "retry_setup")
             store.record_user_activity_usage(
                 user_id=current_user["id"],
@@ -464,6 +482,10 @@ def make_router(store: Store) -> APIRouter:
     async def watch_repo(repo_id: str, current_user: CurrentUser) -> dict:
         await _require_visible_repo(store, repo_id, current_user)
         repo = store.get_repo(repo_id)
+        if repo is None:
+            raise HTTPException(status_code=404, detail="Repo not found")
+        if _watch_requires_quota_check(store, repo, current_user):
+            _ensure_user_can_trigger_activity(store, current_user)
         should_assign_manager = repo is not None and (not repo.get("manager_user_id") or not repo.get("watch"))
         activity_id, status = _queue_repo_setup(store, repo_id, "watch", current_user=current_user)
         if should_assign_manager:
